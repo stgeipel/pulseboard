@@ -84,35 +84,63 @@ const GRAPHITE: Theme = Theme {
 pub const THEMES: &[&Theme] = &[&PORCELAIN, &GRAPHITE];
 pub const DEFAULT_THEME: &Theme = &GRAPHITE;
 
-#[derive(Deserialize, Serialize)]
-struct Appearance {
-    theme: String,
+#[derive(Clone, Copy, Default, Deserialize, Serialize, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ServerLayout {
+    #[default]
+    Matrix,
+    Cards,
 }
 
-pub fn load(path: &Path) -> Result<&'static Theme> {
+pub struct Appearance {
+    pub theme: &'static Theme,
+    pub server_layout: ServerLayout,
+}
+
+impl Default for Appearance {
+    fn default() -> Self {
+        Self {
+            theme: DEFAULT_THEME,
+            server_layout: ServerLayout::default(),
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+struct StoredAppearance {
+    theme: String,
+    #[serde(default)]
+    server_layout: ServerLayout,
+}
+
+pub fn load(path: &Path) -> Result<Appearance> {
     let contents = match fs::read_to_string(path) {
         Ok(contents) => contents,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(DEFAULT_THEME),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Appearance::default()),
         Err(error) => {
             return Err(error).context("Design-Einstellungen konnten nicht gelesen werden");
         }
     };
-    let settings: Appearance =
+    let settings: StoredAppearance =
         toml::from_str(&contents).context("Design-Einstellungen sind ungültig")?;
-    Ok(THEMES
-        .iter()
-        .copied()
-        .find(|theme| theme.id == settings.theme)
-        .unwrap_or(DEFAULT_THEME))
+    Ok(Appearance {
+        theme: THEMES
+            .iter()
+            .copied()
+            .find(|theme| theme.id == settings.theme)
+            .unwrap_or(DEFAULT_THEME),
+        server_layout: settings.server_layout,
+    })
 }
 
-pub fn save(path: &Path, theme: &Theme) -> Result<()> {
+pub fn save(path: &Path, theme: &Theme, server_layout: ServerLayout) -> Result<()> {
     let directory = path
         .parent()
         .context("Verzeichnis für Design-Einstellungen fehlt")?;
     fs::create_dir_all(directory)?;
-    let contents = toml::to_string(&Appearance {
+    let contents = toml::to_string(&StoredAppearance {
         theme: theme.id.into(),
+        server_layout,
     })?;
     let mut file = tempfile::NamedTempFile::new_in(directory)?;
     file.write_all(contents.as_bytes())?;
@@ -130,16 +158,23 @@ mod tests {
         let path = directory.path().join("appearance.toml");
         let config = directory.path().join("config.toml");
         fs::write(&config, "interval_seconds = 60")?;
-        assert_eq!(load(&path)?.id, DEFAULT_THEME.id);
+        assert_eq!(load(&path)?.theme.id, DEFAULT_THEME.id);
 
         for theme in THEMES {
-            save(&path, theme)?;
-            assert_eq!(load(&path)?.id, theme.id);
+            save(&path, theme, ServerLayout::Cards)?;
+            assert_eq!(load(&path)?.server_layout, ServerLayout::Cards);
+            assert_eq!(load(&path)?.theme.id, theme.id);
         }
 
         assert_eq!(fs::read_to_string(config)?, "interval_seconds = 60");
+        fs::write(&path, "theme = 'porcelain'")?;
+        let legacy = load(&path)?;
+        assert_eq!(legacy.theme.id, "porcelain");
+        assert_eq!(legacy.server_layout, ServerLayout::Matrix);
+        save(&path, legacy.theme, ServerLayout::Matrix)?;
+        assert_eq!(load(&path)?.server_layout, ServerLayout::Matrix);
         fs::write(&path, "theme = 'removed-theme'")?;
-        assert_eq!(load(&path)?.id, DEFAULT_THEME.id);
+        assert_eq!(load(&path)?.theme.id, DEFAULT_THEME.id);
         Ok(())
     }
 }
