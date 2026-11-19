@@ -12,6 +12,8 @@ Der Installer ist für Windows 10 ab 22H2 und Windows 11 (x64) konfiguriert. Unt
 
 ## Konfiguration
 
+Über **Design** in der Kopfzeile wechselst du zwischen **Porzellan & Kobaltblau** und **Graphit & Bernstein**. Pulseboard speichert die Auswahl in `appearance.toml` neben `config.toml` und lädt sie beim nächsten Start wieder. Die Standardpalette ist Graphit & Bernstein.
+
 Pulseboard legt beim ersten Start eine Vorlage unter `%APPDATA%\Pulseboard\config\config.toml` an. Endpunkte werden erst nach dem Eintragen aktiv. Die App prüft sie beim Start, nach dem Neuladen und anschließend standardmäßig alle 60 Sekunden.
 
 ### Servergruppen
@@ -95,6 +97,8 @@ password_env = "PULSEBOARD_LEGACY_PASSWORD"
 - Windows meldet beim ersten erkannten Ausfall und beim Wechsel zwischen erreichbar und fehlerhaft. Anhaltende Fehler lösen pro Prüfzyklus keine weiteren Meldungen aus. **Nicht stören** und die Windows-Benachrichtigungseinstellungen können die Anzeige beeinflussen.
 
 ## Entwickeln und veröffentlichen
+
+Für weitere Designs ergänze eine Palette in `src/appearance.rs` und trage sie in `THEMES` ein. Die Felder benennen die jeweiligen Rollen, etwa Akzent, Flächen, Text und Statusfarben. Verwende eine eindeutige, stabile `id`. Das Dropdown übernimmt neue Paletten aus `THEMES` automatisch.
 
 Auf Windows brauchst du Rust (MSVC-Toolchain), die Visual Studio C++ Build Tools und das Windows SDK. Für Release-Builds muss GPUI `fxc.exe` finden. Falls nötig, setze `GPUI_FXC_PATH` auf den vollständigen Pfad.
 
