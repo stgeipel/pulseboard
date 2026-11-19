@@ -3,8 +3,9 @@ mod server_views;
 use async_channel::Sender;
 use chrono::{DateTime, Local};
 use gpui::{
-    ClickEvent, ClipboardItem, Context, Div, FocusHandle, FontWeight, MouseButton, SharedString,
-    Stateful, Window, deferred, div, prelude::*, px, rgb,
+    BoxShadow, ClickEvent, ClipboardItem, Context, Div, FocusHandle, FontWeight, MouseButton,
+    SharedString, Stateful, Window, deferred, div, linear_color_stop, linear_gradient, point,
+    prelude::*, px, rgb,
 };
 use pulseboard::{
     appearance::{self, DEFAULT_THEME, ServerLayout, THEMES, Theme},
@@ -642,6 +643,15 @@ impl Render for Dashboard {
                 .child(div().flex().flex_col().gap_5().px_8().py_5()
                     .child(div().flex().flex_wrap().items_center().gap_x_5().gap_y_2().rounded_md().border_1()
                         .border_color(rgb(theme.border)).bg(rgb(theme.surface)).px_4().py_2().text_sm()
+                        .when_some(theme.glow, |summary, color| {
+                            with_glow(summary, theme, 16.0, 0.24)
+                                .border_color(gpui::Hsla::from(rgb(color)).opacity(0.55))
+                                .bg(linear_gradient(
+                                    90.0,
+                                    linear_color_stop(rgb(theme.accent_soft), 0.0),
+                                    linear_color_stop(rgb(theme.surface), 1.0),
+                                ))
+                        })
                         .child(format!("{} Server", self.config.servers.len()))
                         .child(format!("{total} Checks"))
                         .child(div().text_color(rgb(theme.success)).child(format!("{healthy} erreichbar")))
@@ -885,6 +895,19 @@ fn dot(color: u32) -> Div {
         .bg(rgb(color))
 }
 
+fn with_glow<E: Styled>(element: E, theme: &Theme, radius: f32, opacity: f32) -> E {
+    if let Some(color) = theme.glow {
+        element.shadow(vec![BoxShadow {
+            color: gpui::Hsla::from(rgb(color)).opacity(opacity),
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(radius),
+            spread_radius: px(0.0),
+        }])
+    } else {
+        element
+    }
+}
+
 fn wordmark(theme: &Theme) -> Div {
     div()
         .flex()
@@ -896,6 +919,9 @@ fn wordmark(theme: &Theme) -> Div {
         .bg(rgb(theme.accent_soft))
         .border_1()
         .border_color(rgb(theme.border))
+        .when(theme.glow.is_some(), |logo| {
+            with_glow(logo, theme, 11.0, 0.32)
+        })
         .children([7.0, 15.0, 22.0, 12.0].into_iter().map(|h| {
             div()
                 .w(px(2.0))
@@ -944,6 +970,9 @@ fn button(
         .text_color(rgb(foreground))
         .text_sm()
         .font_weight(FontWeight::MEDIUM)
+        .when(primary && enabled, |button| {
+            with_glow(button, theme, 10.0, 0.28)
+        })
         .when(enabled, |button| {
             button
                 .cursor_pointer()

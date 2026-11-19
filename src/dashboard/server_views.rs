@@ -1,4 +1,4 @@
-use super::{Dashboard, button};
+use super::{Dashboard, button, with_glow};
 use gpui::{
     ClickEvent, Context, Div, FontWeight, KeyDownEvent, SharedString, Window, div, prelude::*, px,
     rgb,
@@ -338,7 +338,8 @@ impl Dashboard {
                                 |cell| cell.bg(rgb(theme.error_soft)),
                             )
                             .when(active, |cell| {
-                                cell.bg(rgb(theme.accent_soft))
+                                with_glow(cell, theme, 9.0, 0.26)
+                                    .bg(rgb(theme.accent_soft))
                                     .border_color(rgb(theme.accent))
                                     .border_1()
                             })
@@ -419,6 +420,7 @@ impl Dashboard {
                                 theme.surface
                             }))
                             .p_3()
+                            .when(selected, |card| with_glow(card, theme, 11.0, 0.24))
                             .hover(|style| style.bg(rgb(theme.panel)))
                             .cursor_pointer()
                             .child(
