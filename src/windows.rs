@@ -115,9 +115,9 @@ fn hwnd(window: &Window) -> Option<HWND> {
     }
 }
 
-pub fn decorate(window: &Window) {
+pub fn decorate(window: &Window, dark: bool) {
     if let Some(hwnd) = hwnd(window) {
-        let dark_mode: u32 = 1;
+        let dark_mode = u32::from(dark);
         unsafe { DwmSetWindowAttribute(hwnd, 20, (&raw const dark_mode).cast(), 4) };
     }
 }
