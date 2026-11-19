@@ -8,7 +8,7 @@ Pulseboard ist ein lokaler Healthcheck-Monitor für Windows mit einer dunklen, n
 2. Öffne Pulseboard und klicke auf **Konfiguration öffnen**. Trage deine Endpunkte ein, speichere die Datei und klicke auf **Neu laden**.
 3. Für ein Update öffnest du **Updates**, beendest Pulseboard über das Tray-Menü und führst den neueren Installer aus. Der Installationspfad bleibt gleich. Konfiguration und Autostart-Einstellung bleiben bei einem Upgrade erhalten.
 
-Der Installer ist für Windows 10 ab 22H2 und Windows 11 (x64) konfiguriert. Die Installationsdatei ist unsigniert. Der Release-Download enthält zusätzlich eine SHA-256-Datei.
+Der Installer ist für Windows 10 ab 22H2 und Windows 11 (x64) konfiguriert. Unter **Assets** findest du auch `pulseboard.exe` zum direkten Start ohne Installation. Die EXE-Dateien sind unsigniert. Für beide gibt es eine SHA-256-Datei.
 
 ## Konfiguration
 
@@ -72,4 +72,4 @@ cargo test --no-default-features --locked
 cargo build --release --locked
 ```
 
-Der Workflow **Windows build and release** baut einen Installer als Actions-Artefakt. Für eine Veröffentlichung erhöhe bei einer neuen Version die Nummer in `Cargo.toml`, aktualisiere `Cargo.lock` und pushe ein passendes Tag (`v0.1.0` für die erste Version). Alternativ kannst du den Workflow auf `main` mit der Option **Publish** manuell starten. Der Windows-Build bezieht den Link zur Update-Seite aus `PULSEBOARD_REPOSITORY` im Format `owner/repo`.
+Der Workflow **Windows build and release** baut `pulseboard.exe` und den Installer für Windows x64. Beide Dateien und ihre SHA-256-Prüfsummen stehen im Actions-Artefakt und bei einer Veröffentlichung unter **Releases → Assets** bereit. Für eine neue Version erhöhe die Nummer in `Cargo.toml`, aktualisiere `Cargo.lock` und pushe ein passendes Tag (`v0.1.0` für die erste Version). Alternativ kannst du den Workflow auf `main` mit der Option **Publish** manuell starten. Der Windows-Build bezieht den Link zur Update-Seite aus `PULSEBOARD_REPOSITORY` im Format `owner/repo`.

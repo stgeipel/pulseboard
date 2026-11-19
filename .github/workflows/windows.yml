@@ -76,9 +76,17 @@ jobs:
           }
           & $iscc "/DAppVersion=$env:APP_VERSION" installer/pulseboard.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          $installer = Get-Item "dist/Pulseboard-$env:APP_VERSION-Windows-x64-Setup.exe"
-          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
-          "$hash  $($installer.Name)" | Set-Content "dist/$($installer.Name).sha256" -Encoding ascii
+      - name: Stage Windows executables and checksums
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          Copy-Item -LiteralPath target/release/pulseboard.exe -Destination dist/pulseboard.exe
+          $names = @('pulseboard.exe', "Pulseboard-$env:APP_VERSION-Windows-x64-Setup.exe")
+          foreach ($name in $names) {
+            $hash = (Get-FileHash -LiteralPath "dist/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $name" | Set-Content -LiteralPath "dist/$name.sha256" -Encoding ascii
+          }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pulseboard-windows-x64
