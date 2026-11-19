@@ -25,6 +25,9 @@ fn main() {
         }
     };
 
+    #[cfg(target_os = "windows")]
+    windows::install_crash_log();
+
     Application::new().run(|cx: &mut App| {
         #[cfg(target_os = "windows")]
         let tray = windows::Tray::new();

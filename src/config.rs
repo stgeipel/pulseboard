@@ -4,7 +4,7 @@ use reqwest::{
     Url,
     header::{HeaderName, HeaderValue},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, OpenOptions},
@@ -21,6 +21,10 @@ pub struct Config {
     pub timeout_seconds: u64,
     pub close_to_tray: bool,
     pub notifications: bool,
+    pub servers: Vec<Server>,
+    #[serde(rename = "checks")]
+    standalone: Vec<CheckDefinition>,
+    #[serde(skip)]
     pub checks: Vec<Check>,
 }
 
@@ -31,35 +35,73 @@ impl Default for Config {
             timeout_seconds: 10,
             close_to_tray: true,
             notifications: true,
+            servers: Vec::new(),
+            standalone: Vec::new(),
             checks: Vec::new(),
         }
     }
 }
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct Check {
+pub struct Server {
     pub id: String,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<Url>,
+    #[serde(default)]
+    checks: Vec<CheckDefinition>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct CheckKey {
+    pub server: Option<String>,
+    pub id: String,
+}
+
+#[derive(Clone, PartialEq)]
+pub struct Check {
+    pub key: CheckKey,
     pub url: Url,
+    pub request: CheckDefinition,
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct CheckDefinition {
+    id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<Url>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
     #[serde(default)]
     pub method: Method,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub headers_from_env: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<BasicAuth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        alias = "expected_results",
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub expected_status: Vec<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
 }
 
-#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Default, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum Method {
     #[default]
+    #[serde(alias = "get", alias = "Get")]
     Get,
+    #[serde(alias = "post", alias = "Post")]
     Post,
 }
 
@@ -72,12 +114,77 @@ impl Method {
     }
 }
 
-#[derive(Clone, Deserialize, PartialEq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct BasicAuth {
     pub username: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub password_env: Option<String>,
+}
+
+impl Config {
+    pub fn copy_server_toml(&self, id: &str) -> Result<String> {
+        #[derive(Serialize)]
+        struct ServerBlock {
+            servers: [Server; 1],
+        }
+
+        let mut server = self
+            .servers
+            .iter()
+            .find(|server| server.id == id)
+            .context("Servergruppe nicht gefunden")?
+            .clone();
+        server.id = copy_id(id, |candidate| {
+            self.servers.iter().any(|server| server.id == candidate)
+        });
+        server.name.push_str(" (Kopie)");
+        Ok(toml::to_string_pretty(&ServerBlock { servers: [server] })?)
+    }
+
+    pub fn copy_check_toml(&self, key: &CheckKey) -> Result<String> {
+        #[derive(Serialize)]
+        struct CheckBlock {
+            checks: [CheckDefinition; 1],
+        }
+
+        let mut check = self
+            .checks
+            .iter()
+            .find(|check| &check.key == key)
+            .context("Healthcheck nicht gefunden")?
+            .request
+            .clone();
+        check.id = copy_id(&key.id, |candidate| {
+            self.checks
+                .iter()
+                .any(|check| check.key.server == key.server && check.key.id == candidate)
+        });
+        let block = CheckBlock { checks: [check] };
+        if key.server.is_none() {
+            return Ok(toml::to_string_pretty(&block)?);
+        }
+
+        // A check is pasted inside an existing [[servers]] block, including any header sub-tables.
+        #[derive(Serialize)]
+        struct GroupBlock {
+            servers: CheckBlock,
+        }
+        Ok(toml::to_string_pretty(&GroupBlock { servers: block })?)
+    }
+}
+
+fn copy_id(id: &str, in_use: impl Fn(&str) -> bool) -> String {
+    let prefix = format!("{id}-copy");
+    let mut candidate = prefix.clone();
+    let mut suffix = 2;
+    while in_use(&candidate) {
+        candidate = format!("{prefix}-{suffix}");
+        suffix += 1;
+    }
+    candidate
 }
 
 pub fn path() -> Result<PathBuf> {
@@ -105,7 +212,7 @@ pub fn load(path: &Path) -> Result<Config> {
 }
 
 pub fn parse(content: &str) -> Result<Config> {
-    let config: Config = toml::from_str(content).map_err(|error| {
+    let mut config: Config = toml::from_str(content).map_err(|error| {
         let location = error
             .span()
             .and_then(|span| content.get(..span.start))
@@ -129,31 +236,93 @@ pub fn parse(content: &str) -> Result<Config> {
         valid_timeout(config.timeout_seconds),
         "timeout_seconds muss zwischen 1 und 120 liegen"
     );
+    config.checks = resolve_checks(&config.standalone, None)?;
     let mut ids = HashSet::new();
-    for (index, check) in config.checks.iter().enumerate() {
-        validate_check(check, &mut ids).with_context(|| format!("Check Nr. {}", index + 1))?;
+    for (index, server) in config.servers.iter().enumerate() {
+        let result = (|| {
+            ensure!(
+                !server.id.trim().is_empty() && ids.insert(server.id.as_str()),
+                "Jeder Server braucht eine eindeutige, nicht leere id"
+            );
+            ensure!(!server.name.trim().is_empty(), "name fehlt");
+            if let Some(base_url) = &server.base_url {
+                validate_url(base_url).context("Ungültige base_url")?;
+                ensure!(
+                    base_url.query().is_none(),
+                    "base_url darf keinen Querystring enthalten"
+                );
+            }
+            resolve_checks(&server.checks, Some(server))
+        })()
+        .with_context(|| format!("Server Nr. {}", index + 1))?;
+        config.checks.extend(result);
     }
     Ok(config)
 }
 
-fn validate_check<'a>(check: &'a Check, ids: &mut HashSet<&'a str>) -> Result<()> {
+fn resolve_checks(checks: &[CheckDefinition], server: Option<&Server>) -> Result<Vec<Check>> {
+    let mut ids = HashSet::new();
+    checks
+        .iter()
+        .enumerate()
+        .map(|(index, check)| {
+            let result = (|| {
+                validate_check(check, &mut ids)?;
+                let url = match (&check.url, &check.path) {
+                    (Some(url), None) => url.clone(),
+                    (None, Some(path)) => {
+                        let base_url = server
+                            .and_then(|server| server.base_url.as_ref())
+                            .context("path benötigt eine base_url in der Servergruppe")?;
+                        ensure!(
+                            path.starts_with('/')
+                                && !path.starts_with("//")
+                                && !path.contains('\\'),
+                            "path muss mit einem einzelnen / beginnen"
+                        );
+                        let url = base_url.join(path).context("Ungültiger path")?;
+                        ensure!(
+                            url.origin() == base_url.origin(),
+                            "path muss auf denselben Server zeigen"
+                        );
+                        url
+                    }
+                    _ => bail!("Jeder Check braucht entweder url oder path"),
+                };
+                validate_url(&url)?;
+                Ok(Check {
+                    key: CheckKey {
+                        server: server.map(|server| server.id.clone()),
+                        id: check.id.clone(),
+                    },
+                    url,
+                    request: check.clone(),
+                })
+            })();
+            result.with_context(|| format!("Check Nr. {}", index + 1))
+        })
+        .collect()
+}
+
+fn validate_url(url: &Url) -> Result<()> {
+    ensure!(
+        matches!(url.scheme(), "http" | "https") && url.host().is_some(),
+        "url muss eine HTTP- oder HTTPS-Adresse sein"
+    );
+    ensure!(
+        url.username().is_empty() && url.password().is_none(),
+        "Zugangsdaten bitte über Header oder basic_auth angeben"
+    );
+    ensure!(url.fragment().is_none(), "url darf kein Fragment enthalten");
+    Ok(())
+}
+
+fn validate_check<'a>(check: &'a CheckDefinition, ids: &mut HashSet<&'a str>) -> Result<()> {
     ensure!(
         !check.id.trim().is_empty() && ids.insert(check.id.as_str()),
         "Jeder Check braucht eine eindeutige, nicht leere id"
     );
     ensure!(!check.name.trim().is_empty(), "name fehlt");
-    ensure!(
-        matches!(check.url.scheme(), "http" | "https") && check.url.host().is_some(),
-        "url muss eine HTTP- oder HTTPS-Adresse sein"
-    );
-    ensure!(
-        check.url.username().is_empty() && check.url.password().is_none(),
-        "Zugangsdaten bitte über Header oder basic_auth angeben"
-    );
-    ensure!(
-        check.url.fragment().is_none(),
-        "url darf kein Fragment enthalten"
-    );
     ensure!(
         check.timeout_seconds.is_none_or(valid_timeout),
         "timeout_seconds muss zwischen 1 und 120 liegen"

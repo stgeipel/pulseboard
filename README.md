@@ -14,6 +14,37 @@ Der Installer ist für Windows 10 ab 22H2 und Windows 11 (x64) konfiguriert. Unt
 
 Pulseboard legt beim ersten Start eine Vorlage unter `%APPDATA%\Pulseboard\config\config.toml` an. Endpunkte werden erst nach dem Eintragen aktiv. Die App prüft sie beim Start, nach dem Neuladen und anschließend standardmäßig alle 60 Sekunden.
 
+### Servergruppen
+
+Lege mit `[[servers]]` eine Gruppe an und ergänze darunter beliebig viele `[[servers.checks]]`. Die Gruppennamen erscheinen im Dashboard mit der Anzahl der Checks und Fehler. Du kannst jede Gruppe einklappen.
+
+```toml
+[[servers]]
+id = "produktion"
+name = "Produktion"
+base_url = "https://api.example.com"
+
+[[servers.checks]]
+id = "live"
+name = "API Live"
+path = "/health/live"
+method = "GET"
+expected_status = [200, 204]
+
+[[servers.checks]]
+id = "ready"
+name = "API Ready"
+path = "/health/ready"
+method = "GET"
+```
+
+- `path` beginnt mit `/` und bezieht sich auf die Wurzel der `base_url`. Verwende für einen Check mit eigener vollständiger Adresse `url` anstelle von `path`. Eine Gruppe mit vollständigen URLs kann `base_url` weglassen.
+- **Server kopieren** legt den gesamten TOML-Block mit einer neuen Server-ID in die Zwischenablage. Füge ihn am Ende der Datei ein und lade die Konfiguration neu. Checks mit `path` verwenden die `base_url` der Kopie, sobald du sie änderst.
+- **Kopieren** in einer Zeile kopiert den einzelnen Check mit einer neuen ID. Füge ihn am Ende der gewünschten Servergruppe ein, vor dem nächsten `[[servers]]`. Bei Checks im Format `[[checks]]` kannst du die Kopie als eigenen Block ans Dateiende setzen. Wörtlich eingetragene Header, Passwörter und Anfrageinhalte werden ebenfalls kopiert.
+- Eine Check-ID muss innerhalb ihrer Servergruppe eindeutig sein. Bereits vorhandene `[[checks]]` funktionieren weiter und erscheinen unter **Einzelne Endpunkte**.
+
+### Einzelne Endpunkte
+
 ```toml
 interval_seconds = 60
 timeout_seconds = 10
@@ -48,13 +79,14 @@ username = "monitor"
 password_env = "PULSEBOARD_LEGACY_PASSWORD"
 ```
 
-- Jeder Check braucht eine stabile, eindeutige `id`. Ohne `method` sendet Pulseboard einen GET-Request. Ohne `expected_status` zählt jeder 2xx-Status als Erfolg.
+- Jeder Check braucht eine stabile `id`. Ohne `method` sendet Pulseboard einen GET-Request. Ohne `expected_status` zählt jeder 2xx-Status als Erfolg.
 - Pulseboard bewertet den HTTP-Status. Die Latenz endet beim Empfang der Antwort-Header. Weiterleitungen werden als eigener HTTP-Status angezeigt und Zugangsdaten bleiben am konfigurierten Endpunkt.
 - `headers` akzeptiert direkte Werte. Bei `headers_from_env` enthält der TOML-Wert den Variablennamen und die Windows-Benutzervariable den vollständigen Headerwert, etwa `Bearer …`. Für Basic Auth stehen `password_env` und alternativ `password` zur Verfügung.
 - Für reale Zugangsdaten sind Windows-Benutzervariablen vorgesehen. Starte Pulseboard nach einer Änderung dieser Variablen neu. Die Beispieldatei gehört ins Repository. Die lokale Konfiguration mit Endpunkten und Zugangsdaten bleibt auf dem Rechner.
 - Für POST-Checks sollten die konfigurierten Endpunkte wiederholbare, nebenwirkungsfreie Prüfungen anbieten.
 - Bei einem Syntaxfehler nach **Neu laden** zeigt die Oberfläche den Fehler und der Monitor verwendet die letzte gültige Konfiguration weiter.
 - Der Verlauf bleibt während der laufenden Sitzung erhalten.
+- Bei einem Rust-Panic schreibt die Windows-Version einen Stacktrace nach `%APPDATA%\Pulseboard\config\crash.log`. Der Log enthält weder die Konfiguration noch die Panic-Nachricht.
 
 ## Tray, Autostart und Benachrichtigungen
 

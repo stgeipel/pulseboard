@@ -98,16 +98,23 @@ async fn probes_get_on_schedule_and_detects_recovery_without_a_manual_command() 
             r#"
             interval_seconds = 1
 
-            [[checks]]
+            [[servers]]
+            id = "local"
+            name = "Local"
+            base_url = "http://{address}"
+
+            [[servers.checks]]
             id = "test"
             name = "Test"
-            url = "http://{address}/health"
+            path = "/health"
+            method = "GET"
+            expected_status = [200, 204]
             "#
         ),
     )
     .unwrap();
     let server = std::thread::spawn(move || {
-        for status in ["503 Service Unavailable", "204 No Content"] {
+        for status in ["503 Service Unavailable", "200 OK", "204 No Content"] {
             let (mut request, headers) = read_request(&listener);
             assert!(headers.starts_with("GET /health HTTP/1.1"));
             write!(
@@ -120,9 +127,12 @@ async fn probes_get_on_schedule_and_detects_recovery_without_a_manual_command() 
     let (_commands, events) = monitor::start(file).unwrap();
     let outcomes = tokio::time::timeout(Duration::from_secs(5), async {
         let mut outcomes = Vec::new();
-        while outcomes.len() < 2 {
+        while outcomes.len() < 3 {
             if let Event::Finished(mut results, _) = events.recv().await.unwrap() {
-                outcomes.push(results.pop().unwrap().outcome);
+                let result = results.pop().unwrap();
+                assert_eq!(result.key.server.as_deref(), Some("local"));
+                assert_eq!(result.key.id, "test");
+                outcomes.push(result.outcome);
             }
         }
         outcomes
@@ -131,7 +141,11 @@ async fn probes_get_on_schedule_and_detects_recovery_without_a_manual_command() 
     .unwrap();
     assert!(matches!(
         outcomes.as_slice(),
-        [Outcome::Unhealthy(503), Outcome::Healthy(204)]
+        [
+            Outcome::Unhealthy(503),
+            Outcome::Healthy(200),
+            Outcome::Healthy(204)
+        ]
     ));
     server.join().unwrap();
 }

@@ -3,6 +3,24 @@ timeout_seconds = 10
 close_to_tray = true
 notifications = true
 
+# [[servers]]
+# id = "produktion"
+# name = "Produktion"
+# base_url = "https://api.example.com"
+#
+# [[servers.checks]]
+# id = "live"
+# name = "API Live"
+# path = "/health/live"
+# method = "GET"
+# expected_status = [200, 204]
+#
+# [[servers.checks]]
+# id = "ready"
+# name = "API Ready"
+# path = "/health/ready"
+# method = "GET"
+
 # [[checks]]
 # id = "backend"
 # name = "Backend API"
