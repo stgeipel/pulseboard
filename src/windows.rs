@@ -1,14 +1,19 @@
 use anyhow::{Context, Result};
 use async_channel::{Receiver, bounded};
 use gpui::Window;
+use pulseboard::diagnostics::{SessionLog, exception_line};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     backtrace::Backtrace,
-    ffi::OsStr,
-    fs::{self, OpenOptions},
-    io::{ErrorKind, Write},
-    os::windows::ffi::OsStrExt,
+    ffi::{OsStr, c_void},
+    io::ErrorKind,
+    os::windows::{ffi::OsStrExt, io::IntoRawHandle},
+    path::PathBuf,
     ptr,
+    sync::{
+        OnceLock,
+        atomic::{AtomicPtr, Ordering},
+    },
 };
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
@@ -17,7 +22,13 @@ use tray_icon::{
 use windows_sys::Win32::{
     Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, HWND},
     Graphics::Dwm::DwmSetWindowAttribute,
-    System::Threading::CreateMutexW,
+    Storage::FileSystem::WriteFile,
+    System::{
+        Diagnostics::Debug::{
+            EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, SetUnhandledExceptionFilter,
+        },
+        Threading::CreateMutexW,
+    },
     UI::{
         Shell::SetCurrentProcessExplicitAppUserModelID,
         WindowsAndMessaging::{
@@ -32,33 +43,80 @@ const APP_ID: &str = "Pulseboard.Desktop";
 const MUTEX_NAME: &str = "Local\\Pulseboard.Desktop";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
+static CRASH_LOG: OnceLock<SessionLog> = OnceLock::new();
+static EXCEPTION_LOG_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+
 pub fn install_crash_log() {
     let Ok(path) = pulseboard::config::path() else {
         return;
     };
-    let Some(directory) = path.parent().map(ToOwned::to_owned) else {
+    let Some(directory) = path.parent() else {
         return;
     };
+    let Ok(log) = SessionLog::start(directory) else {
+        return;
+    };
+    if CRASH_LOG.set(log).is_err() {
+        return;
+    }
+    if let Some(log) = CRASH_LOG.get()
+        && let Ok(file) = log.open()
+    {
+        // Keep the append-only handle open until process exit so the exception filter
+        // never needs to open a path or allocate memory on a faulting thread.
+        EXCEPTION_LOG_HANDLE.store(file.into_raw_handle(), Ordering::Release);
+        unsafe { SetUnhandledExceptionFilter(Some(log_native_exception)) };
+    }
+
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic| {
-        if fs::create_dir_all(&directory).is_ok()
-            && let Ok(mut file) = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(directory.join("crash.log"))
-        {
-            // The panic message can contain endpoint or credential values. Record only its location and stack.
-            let _ = writeln!(
-                file,
-                "\nPulseboard {} · {:?} · {:?}\n{}",
-                env!("CARGO_PKG_VERSION"),
-                std::time::SystemTime::now(),
+        if let Some(log) = CRASH_LOG.get() {
+            // The panic payload might contain endpoint details or credentials.
+            let _ = log.record(format_args!(
+                "Rust panic at {:?}\n{}",
                 panic.location(),
                 Backtrace::force_capture()
-            );
+            ));
         }
         previous(panic);
     }));
+}
+
+unsafe extern "system" fn log_native_exception(exception: *const EXCEPTION_POINTERS) -> i32 {
+    let handle = EXCEPTION_LOG_HANDLE.load(Ordering::Acquire);
+    if !handle.is_null()
+        && let Some(exception) = unsafe { exception.as_ref() }
+        && let Some(record) = unsafe { exception.ExceptionRecord.as_ref() }
+    {
+        let line = exception_line(record.ExceptionCode as u32);
+        let mut written = 0;
+        unsafe {
+            WriteFile(
+                handle,
+                line.as_ptr(),
+                line.len() as u32,
+                &mut written,
+                ptr::null_mut(),
+            )
+        };
+    }
+    EXCEPTION_CONTINUE_SEARCH
+}
+
+pub fn diagnostic_event(event: &'static str) {
+    if let Some(log) = CRASH_LOG.get() {
+        let _ = log.record(format_args!("{event}"));
+    }
+}
+
+pub fn finish_crash_log() {
+    if let Some(log) = CRASH_LOG.get() {
+        let _ = log.finish();
+    }
+}
+
+pub fn crash_log_path() -> Option<PathBuf> {
+    CRASH_LOG.get().map(SessionLog::path)
 }
 
 pub struct Instance(HANDLE);

@@ -110,21 +110,37 @@ impl Dashboard {
                 Ok(enabled) => dashboard.autostart = enabled,
                 Err(error) => dashboard.action_error = Some(error.to_string()),
             }
+            let tray_available = tray.is_ok();
+            let close_to_tray = dashboard.close_to_tray.clone();
+            close_to_tray.set(dashboard.config.close_to_tray);
+            window.on_window_should_close(cx, move |window, _| {
+                let should_hide = tray_available && close_to_tray.get();
+                let hidden = should_hide && windows::hide(window);
+                windows::diagnostic_event(if hidden {
+                    "window hidden in tray"
+                } else if should_hide {
+                    "could not hide window in tray; closing window"
+                } else {
+                    "window close accepted"
+                });
+                !hidden
+            });
             match tray {
                 Ok(tray) => {
-                    let close_to_tray = dashboard.close_to_tray.clone();
-                    close_to_tray.set(dashboard.config.close_to_tray);
-                    window.on_window_should_close(cx, move |window, _| {
-                        !close_to_tray.get() || !windows::hide(window)
-                    });
                     let events = tray.events.clone();
                     cx.spawn_in(window, async move |weak, cx| {
                         while let Ok(event) = events.recv().await {
                             if weak
                                 .update_in(cx, |this, window, cx| match event {
-                                    TrayAction::Open => windows::restore(window),
+                                    TrayAction::Open => {
+                                        windows::diagnostic_event("restoring window from tray");
+                                        windows::restore(window);
+                                    }
                                     TrayAction::Run => this.send(Command::Run, cx),
-                                    TrayAction::Quit => cx.quit(),
+                                    TrayAction::Quit => {
+                                        windows::diagnostic_event("quit requested from tray");
+                                        cx.quit();
+                                    }
                                 })
                                 .is_err()
                             {
@@ -136,6 +152,7 @@ impl Dashboard {
                     dashboard.tray = Some(tray);
                 }
                 Err(_) => {
+                    windows::diagnostic_event("tray unavailable");
                     dashboard.action_error =
                         Some("Das Windows-Tray konnte nicht eingerichtet werden.".into());
                 }
@@ -148,6 +165,8 @@ impl Dashboard {
     fn receive(&mut self, event: Event, cx: &mut Context<Self>) {
         match event {
             Event::Configured(config) => {
+                #[cfg(target_os = "windows")]
+                crate::windows::diagnostic_event("health check configuration loaded");
                 self.services.retain(|id, _| {
                     self.config.timeout_seconds == config.timeout_seconds
                         && self
@@ -167,16 +186,30 @@ impl Dashboard {
                 self.close_to_tray.set(self.config.close_to_tray);
             }
             Event::ConfigError(error) => {
+                #[cfg(target_os = "windows")]
+                crate::windows::diagnostic_event("health check configuration failed to load");
                 self.config_error = Some(error);
                 self.working = false;
             }
-            Event::Started => self.working = true,
+            Event::Started => {
+                #[cfg(target_os = "windows")]
+                if self.last_run.is_none() {
+                    crate::windows::diagnostic_event("first health check batch started");
+                }
+                self.working = true;
+            }
             Event::Finished(results, timestamp) => {
+                #[cfg(target_os = "windows")]
+                if self.last_run.is_none() {
+                    crate::windows::diagnostic_event("first health check batch finished");
+                }
                 self.working = false;
                 self.last_run = Some(timestamp);
                 self.apply_results(results, cx);
             }
             Event::Fatal => {
+                #[cfg(target_os = "windows")]
+                crate::windows::diagnostic_event("health check worker failed");
                 self.commands = None;
                 self.working = false;
                 self.config_error =
@@ -344,6 +377,21 @@ impl Dashboard {
                     .map(|_| "Die GitHub Releases konnten nicht geöffnet werden.".into());
             cx.notify();
         }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn open_crash_log(&mut self, cx: &mut Context<Self>) {
+        self.action_error = crate::windows::crash_log_path()
+            .ok_or_else(|| anyhow::anyhow!("Das Absturzprotokoll konnte nicht angelegt werden."))
+            .and_then(|path| {
+                std::process::Command::new("notepad.exe")
+                    .arg(path)
+                    .spawn()?;
+                Ok(())
+            })
+            .err()
+            .map(|err| err.to_string());
+        cx.notify();
     }
 
     fn copy_to_clipboard(
@@ -893,7 +941,12 @@ impl Dashboard {
                             cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_autostart(cx)),
                         ),
                     )
-                    .child(tray_label),
+                    .child(tray_label)
+                    .child(
+                        button(theme, "crash-log", "Absturzprotokoll", false, true).on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.open_crash_log(cx)),
+                        ),
+                    ),
             )
         };
         footer.child(div().flex_1()).child(
