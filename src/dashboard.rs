@@ -1,4 +1,7 @@
+mod config_editor;
 mod server_views;
+
+pub(crate) use config_editor::init as init_editor;
 
 use async_channel::Sender;
 use chrono::{DateTime, Local};
@@ -28,6 +31,7 @@ struct ServiceState {
 
 pub struct Dashboard {
     path: Option<PathBuf>,
+    config_editor: Option<config_editor::ConfigEditor>,
     commands: Option<Sender<Command>>,
     config: Config,
     services: HashMap<CheckKey, ServiceState>,
@@ -60,6 +64,7 @@ impl Dashboard {
     ) -> Self {
         let mut dashboard = Self {
             path: None,
+            config_editor: None,
             commands: None,
             config: Config::default(),
             services: HashMap::new(),
@@ -355,25 +360,6 @@ impl Dashboard {
         }
     }
 
-    fn open_config(&mut self, cx: &mut Context<Self>) {
-        let result = self
-            .path
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Konfigurationspfad fehlt"))
-            .and_then(|path| {
-                config::ensure_file(path)?;
-                #[cfg(target_os = "windows")]
-                std::process::Command::new("notepad.exe")
-                    .arg(path)
-                    .spawn()?;
-                #[cfg(not(target_os = "windows"))]
-                open::that_detached(path)?;
-                Ok(())
-            });
-        self.action_error = result.err().map(|error| error.to_string());
-        cx.notify();
-    }
-
     #[cfg(target_os = "windows")]
     fn toggle_autostart(&mut self, cx: &mut Context<Self>) {
         match crate::windows::set_autostart(!self.autostart) {
@@ -605,6 +591,16 @@ impl Dashboard {
 
 impl Render for Dashboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(editor) = &self.config_editor {
+            self.render_config_editor(editor, cx)
+        } else {
+            self.render_dashboard(window, cx).into_any_element()
+        }
+    }
+}
+
+impl Dashboard {
+    fn render_dashboard(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
         let theme = self.theme;
         let total = self.config.checks.len();
         let (healthy, failed, pending) = self.counts();
@@ -625,61 +621,232 @@ impl Render for Dashboard {
             },
         );
 
-        div().flex().flex_col().size_full().bg(rgb(theme.background)).text_color(rgb(theme.text))
-            .child(div().flex_none().flex().items_center().justify_between().gap_4().h(px(67.0)).px_8().bg(rgb(theme.surface))
-                .border_b_1().border_color(rgb(theme.border))
-                .child(div().flex().items_center().gap_3()
-                    .child(wordmark(theme))
-                    .child(div().text_lg().font_weight(FontWeight::BOLD).child("Pulseboard")))
-                .child(div().flex().gap_2()
-                    .child(button(theme, "open-config", "Konfiguration öffnen", false, self.path.is_some())
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_config(cx))))
-                    .child(button(theme, "reload", "Neu laden", false, !self.working && self.commands.is_some())
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.send(Command::Reload, cx))))
-                    .child(button(theme, "run", if self.working { "Prüfung läuft …" } else { "Jetzt prüfen" }, true, !self.working && total != 0 && self.commands.is_some())
-                        .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.send(Command::Run, cx))))
-                    .child(self.theme_picker(cx))))
-            .child(div().flex_1().min_h_0().id("dashboard-scroll").overflow_y_scroll()
-                .child(div().flex().flex_col().gap_5().px_8().py_5()
-                    .child(div().flex().flex_wrap().items_center().gap_x_5().gap_y_2().rounded_md().border_1()
-                        .border_color(rgb(theme.border)).bg(rgb(theme.surface)).px_4().py_2().text_sm()
-                        .when_some(theme.glow, |summary, color| {
-                            with_glow(summary, theme, 16.0, 0.24)
-                                .border_color(gpui::Hsla::from(rgb(color)).opacity(0.55))
-                                .bg(linear_gradient(
-                                    90.0,
-                                    linear_color_stop(rgb(theme.accent_soft), 0.0),
-                                    linear_color_stop(rgb(theme.surface), 1.0),
-                                ))
-                        })
-                        .child(format!("{} Server", self.config.servers.len()))
-                        .child(format!("{total} Checks"))
-                        .child(div().text_color(rgb(theme.success)).child(format!("{healthy} erreichbar")))
-                        .child(div().text_color(rgb(if failed == 0 { theme.muted } else { theme.error })).child(format!("{failed} Fehler")))
-                        .when(pending > 0, |summary| summary.child(div().text_color(rgb(theme.warning)).child(format!("{pending} ausstehend"))))
-                        .child(div().text_color(rgb(theme.muted)).child(last_run))
-                        .child(div().text_color(rgb(theme.muted)).child(format!("Intervall {} s", self.config.interval_seconds)))
-                        .child(div().flex().items_center().gap_2().text_color(rgb(status_color)).child(dot(status_color)).child(status)))
-                    .children([self.config_error.as_ref(), self.action_error.as_ref()].into_iter().flatten().map(|error| {
-                        div().bg(rgb(theme.error_soft)).rounded_md().px_4().py_3().text_sm().text_color(rgb(theme.error)).child(error.clone())
-                    }))
-                    .children(self.clipboard_status.map(|status| {
-                        div().bg(rgb(theme.panel)).rounded_md().px_4().py_3().text_sm().text_color(rgb(theme.accent_ink)).child(status)
-                    }))
-                    .child(if total == 0 && self.config.servers.is_empty() {
-                        div().flex().flex_col().items_center().justify_center().gap_3().py_8().rounded_xl()
-                            .border_1().border_color(rgb(theme.border)).bg(rgb(theme.surface))
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(rgb(theme.background))
+            .text_color(rgb(theme.text))
+            .child(
+                div()
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_4()
+                    .h(px(67.0))
+                    .px_8()
+                    .bg(rgb(theme.surface))
+                    .border_b_1()
+                    .border_color(rgb(theme.border))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
                             .child(wordmark(theme))
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Noch keine Endpunkte eingerichtet"))
-                            .child(div().text_sm().text_color(rgb(theme.muted)).child("Füge deine Endpunkte in der TOML-Datei hinzu und lade sie neu."))
-                            .child(button(theme, "empty-open", "Konfiguration öffnen", false, self.path.is_some())
-                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_config(cx))))
-                    } else {
-                        self.server_overview(window, cx)
-                    })))
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("Pulseboard"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                button(
+                                    theme,
+                                    "open-config",
+                                    "Konfiguration bearbeiten",
+                                    false,
+                                    self.path.is_some(),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, window, cx| {
+                                        this.open_config_editor(window, cx)
+                                    },
+                                )),
+                            )
+                            .child(
+                                button(
+                                    theme,
+                                    "reload",
+                                    "Neu laden",
+                                    false,
+                                    !self.working && self.commands.is_some(),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| this.send(Command::Reload, cx),
+                                )),
+                            )
+                            .child(
+                                button(
+                                    theme,
+                                    "run",
+                                    if self.working {
+                                        "Prüfung läuft …"
+                                    } else {
+                                        "Jetzt prüfen"
+                                    },
+                                    true,
+                                    !self.working && total != 0 && self.commands.is_some(),
+                                )
+                                .on_click(cx.listener(
+                                    |this, _: &ClickEvent, _, cx| this.send(Command::Run, cx),
+                                )),
+                            )
+                            .child(self.theme_picker(cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .id("dashboard-scroll")
+                    .overflow_y_scroll()
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_5()
+                            .px_8()
+                            .py_5()
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_wrap()
+                                    .items_center()
+                                    .gap_x_5()
+                                    .gap_y_2()
+                                    .rounded_md()
+                                    .border_1()
+                                    .border_color(rgb(theme.border))
+                                    .bg(rgb(theme.surface))
+                                    .px_4()
+                                    .py_2()
+                                    .text_sm()
+                                    .when_some(theme.glow, |summary, color| {
+                                        with_glow(summary, theme, 16.0, 0.24)
+                                            .border_color(
+                                                gpui::Hsla::from(rgb(color)).opacity(0.55),
+                                            )
+                                            .bg(linear_gradient(
+                                                90.0,
+                                                linear_color_stop(rgb(theme.accent_soft), 0.0),
+                                                linear_color_stop(rgb(theme.surface), 1.0),
+                                            ))
+                                    })
+                                    .child(format!("{} Server", self.config.servers.len()))
+                                    .child(format!("{total} Checks"))
+                                    .child(
+                                        div()
+                                            .text_color(rgb(theme.success))
+                                            .child(format!("{healthy} erreichbar")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_color(rgb(if failed == 0 {
+                                                theme.muted
+                                            } else {
+                                                theme.error
+                                            }))
+                                            .child(format!("{failed} Fehler")),
+                                    )
+                                    .when(pending > 0, |summary| {
+                                        summary.child(
+                                            div()
+                                                .text_color(rgb(theme.warning))
+                                                .child(format!("{pending} ausstehend")),
+                                        )
+                                    })
+                                    .child(div().text_color(rgb(theme.muted)).child(last_run))
+                                    .child(div().text_color(rgb(theme.muted)).child(format!(
+                                        "Intervall {} s",
+                                        self.config.interval_seconds
+                                    )))
+                                    .child(
+                                        div()
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .text_color(rgb(status_color))
+                                            .child(dot(status_color))
+                                            .child(status),
+                                    ),
+                            )
+                            .children(
+                                [self.config_error.as_ref(), self.action_error.as_ref()]
+                                    .into_iter()
+                                    .flatten()
+                                    .map(|error| {
+                                        div()
+                                            .bg(rgb(theme.error_soft))
+                                            .rounded_md()
+                                            .px_4()
+                                            .py_3()
+                                            .text_sm()
+                                            .text_color(rgb(theme.error))
+                                            .child(error.clone())
+                                    }),
+                            )
+                            .children(self.clipboard_status.map(|status| {
+                                div()
+                                    .bg(rgb(theme.panel))
+                                    .rounded_md()
+                                    .px_4()
+                                    .py_3()
+                                    .text_sm()
+                                    .text_color(rgb(theme.accent_ink))
+                                    .child(status)
+                            }))
+                            .child(if total == 0 && self.config.servers.is_empty() {
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .gap_3()
+                                    .py_8()
+                                    .rounded_xl()
+                                    .border_1()
+                                    .border_color(rgb(theme.border))
+                                    .bg(rgb(theme.surface))
+                                    .child(wordmark(theme))
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child("Noch keine Endpunkte eingerichtet"),
+                                    )
+                                    .child(div().text_sm().text_color(rgb(theme.muted)).child(
+                                        "Füge deine Endpunkte im Konfigurationseditor hinzu.",
+                                    ))
+                                    .child(
+                                        button(
+                                            theme,
+                                            "empty-open",
+                                            "Konfiguration bearbeiten",
+                                            false,
+                                            self.path.is_some(),
+                                        )
+                                        .on_click(
+                                            cx.listener(|this, _: &ClickEvent, window, cx| {
+                                                this.open_config_editor(window, cx)
+                                            }),
+                                        ),
+                                    )
+                            } else {
+                                self.server_overview(window, cx)
+                            }),
+                    ),
+            )
             .children(self.server_details(cx))
             .child(self.footer(cx))
-            .when_some(self.theme_cursor, |dashboard, cursor| dashboard.child(self.theme_menu(cursor, cx)))
+            .when_some(self.theme_cursor, |dashboard, cursor| {
+                dashboard.child(self.theme_menu(cursor, cx))
+            })
     }
 }
 

@@ -6,7 +6,7 @@ publish = false
 
 [features]
 default = ["desktop"]
-desktop = ["dep:gpui", "dep:open", "dep:chrono", "dep:image", "dep:raw-window-handle", "dep:tray-icon", "dep:windows-sys", "dep:winreg", "dep:winrt-notification"]
+desktop = ["dep:gpui", "dep:gpui-component", "dep:tree-sitter-toml-ng", "dep:open", "dep:chrono", "dep:image", "dep:raw-window-handle", "dep:tray-icon", "dep:windows-sys", "dep:winreg", "dep:winrt-notification"]
 
 [dependencies]
 anyhow = "1"
@@ -14,12 +14,14 @@ async-channel = "2"
 chrono = { version = "0.4", optional = true }
 directories = "6"
 futures-util = "0.3"
+gpui-component = { version = "=0.5.1", optional = true }
 open = { version = "5", optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["default-tls", "system-proxy"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tempfile = "3"
 toml = "0.9"
+tree-sitter-toml-ng = { version = "0.7", optional = true }
 url = { version = "2", features = ["serde"] }
 
 [target.'cfg(not(target_os = "windows"))'.dependencies]
