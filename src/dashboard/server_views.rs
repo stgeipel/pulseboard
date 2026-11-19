@@ -5,15 +5,10 @@ use gpui::{
 };
 use pulseboard::{
     appearance::{ServerLayout, Theme},
-    config::{Check, CheckKey, Server},
+    config::{Check, Server},
     monitor::CheckResult,
 };
 use std::collections::{HashMap, HashSet};
-
-pub(super) struct ServerSelection {
-    pub(super) server_id: String,
-    check: Option<CheckKey>,
-}
 
 struct ServerRow<'a> {
     server: &'a Server,
@@ -99,7 +94,7 @@ impl Dashboard {
                         div()
                             .text_xl()
                             .font_weight(FontWeight::BOLD)
-                            .child("Serverübersicht"),
+                            .child("Serverstatus"),
                     )
                     .child(
                         div()
@@ -138,6 +133,7 @@ impl Dashboard {
                                         move |this, _: &ClickEvent, _, cx| {
                                             if this.server_layout != layout {
                                                 this.server_layout = layout;
+                                                this.selected_card = None;
                                                 this.save_appearance();
                                                 cx.notify();
                                             }
@@ -161,7 +157,7 @@ impl Dashboard {
                     })
             } else {
                 match self.server_layout {
-                    ServerLayout::Matrix => self.server_matrix(&columns, &rows, cx),
+                    ServerLayout::Matrix => self.server_matrix(&columns, &rows),
                     ServerLayout::Cards => self.server_cards(&columns, &rows, window, cx),
                 }
             });
@@ -251,12 +247,7 @@ impl Dashboard {
             }))
     }
 
-    fn server_matrix(
-        &self,
-        columns: &[(&str, &str)],
-        rows: &[ServerRow<'_>],
-        cx: &mut Context<Self>,
-    ) -> Div {
+    fn server_matrix(&self, columns: &[(&str, &str)], rows: &[ServerRow<'_>]) -> Div {
         let theme = self.theme;
         let header = div()
             .flex()
@@ -278,86 +269,45 @@ impl Dashboard {
             .flex_col()
             .child(header)
             .children(rows.iter().map(|row| {
-                let server_id = row.server.id.clone();
-                let selected = self.server_selection.as_ref();
-                let selected_server = selected.is_some_and(|item| item.server_id == server_id);
+                let total_color = if row.failed > 0 {
+                    theme.error
+                } else if row.healthy > 0 && row.healthy == row.checks.len() {
+                    theme.success
+                } else {
+                    theme.muted
+                };
                 div()
                     .flex()
-                    .min_h(px(35.0))
+                    .min_h(px(30.0))
                     .border_t_1()
                     .border_color(rgb(theme.border))
-                    .when(selected_server, |row| row.bg(rgb(theme.accent_soft)))
                     .child(
                         div()
-                            .id(SharedString::from(format!("matrix-server:{server_id}")))
                             .w(px(190.0))
                             .flex_none()
                             .flex()
                             .items_center()
-                            .gap_2()
                             .px_3()
                             .text_sm()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .hover(|style| style.bg(rgb(theme.panel)))
-                            .cursor_pointer()
-                            .child(
-                                div()
-                                    .text_color(rgb(if row.failed > 0 {
-                                        theme.error
-                                    } else {
-                                        theme.muted
-                                    }))
-                                    .child("›"),
-                            )
-                            .child(div().truncate().child(row.server.name.clone()))
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.select_server(&server_id, None, cx);
-                            })),
+                            .child(div().truncate().child(row.server.name.clone())),
                     )
                     .children(columns.iter().map(|(id, _)| {
+                        let cell = matrix_cell(theme);
                         let Some(check) = row.checks.get(id) else {
-                            return matrix_cell(theme)
-                                .text_color(rgb(theme.muted))
-                                .child("·")
-                                .into_any_element();
+                            return cell.text_color(rgb(theme.muted)).child("·");
                         };
                         let result = self.check_result(check);
                         let (symbol, color) = outcome_mark(theme, result);
-                        let key = check.key.clone();
-                        let server_id = row.server.id.clone();
-                        let active = selected.and_then(|item| item.check.as_ref()) == Some(&key);
-                        matrix_cell(theme)
-                            .id(SharedString::from(format!(
-                                "matrix-check:{}:{server_id}:{id}",
-                                server_id.len()
-                            )))
-                            .text_color(rgb(color))
+                        cell.text_color(rgb(color))
                             .font_weight(FontWeight::BOLD)
                             .when(
                                 result.is_some_and(|result| !result.outcome.is_healthy()),
                                 |cell| cell.bg(rgb(theme.error_soft)),
                             )
-                            .when(active, |cell| {
-                                with_glow(cell, theme, 9.0, 0.26)
-                                    .bg(rgb(theme.accent_soft))
-                                    .border_color(rgb(theme.accent))
-                                    .border_1()
-                            })
-                            .hover(|style| style.bg(rgb(theme.panel)))
-                            .cursor_pointer()
                             .child(symbol)
-                            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.select_server(&server_id, Some(&key), cx);
-                            }))
-                            .into_any_element()
                     }))
-                    .child(
-                        matrix_total(theme, row.ratio()).text_color(rgb(if row.failed > 0 {
-                            theme.error
-                        } else {
-                            theme.muted
-                        })),
-                    )
+                    .child(matrix_total(theme, row.ratio()).text_color(rgb(total_color)))
             }));
         div()
             .rounded_md()
@@ -393,10 +343,7 @@ impl Dashboard {
                     .gap_3()
                     .children(chunk.iter().map(|row| {
                         let server_id = row.server.id.clone();
-                        let selected = self
-                            .server_selection
-                            .as_ref()
-                            .is_some_and(|item| item.server_id == server_id);
+                        let selected = self.selected_card.as_deref() == Some(server_id.as_str());
                         let border = if selected {
                             theme.accent
                         } else if row.failed > 0 {
@@ -485,7 +432,10 @@ impl Dashboard {
                                 )
                             })
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                                this.select_server(&server_id, None, cx);
+                                let already_selected =
+                                    this.selected_card.as_deref() == Some(server_id.as_str());
+                                this.selected_card = (!already_selected).then(|| server_id.clone());
+                                cx.notify();
                             }))
                     }))
                     .children((chunk.len()..columns_per_row).map(|_| div().flex_1()))
@@ -493,12 +443,15 @@ impl Dashboard {
     }
 
     pub(super) fn server_details(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let selection = self.server_selection.as_ref()?;
+        if self.server_layout != ServerLayout::Cards {
+            return None;
+        }
+        let selected_id = self.selected_card.as_deref()?;
         let server = self
             .config
             .servers
             .iter()
-            .find(|server| server.id == selection.server_id)?;
+            .find(|server| server.id == selected_id)?;
         let server_id = server.id.clone();
         let theme = self.theme;
         let mut checks = self
@@ -507,18 +460,14 @@ impl Dashboard {
             .iter()
             .filter(|check| check.key.server.as_deref() == Some(&server.id))
             .peekable();
-        let focused = selection
-            .check
-            .as_ref()
-            .and_then(|key| self.config.checks.iter().find(|check| &check.key == key));
-        let body = match focused {
-            Some(check) => self.service_table(std::iter::once(check), cx),
-            None if checks.peek().is_some() => self.service_table(checks, cx),
-            None => div()
+        let body = if checks.peek().is_some() {
+            self.service_table(checks, cx)
+        } else {
+            div()
                 .px_4()
                 .py_3()
                 .text_sm()
-                .child("Keine Checks eingerichtet."),
+                .child("Keine Checks eingerichtet.")
         };
 
         Some(
@@ -542,18 +491,6 @@ impl Dashboard {
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .child(server.name.clone()),
                         )
-                        .when(focused.is_some(), |header| {
-                            header.child(
-                                button(theme, "details-all", "Alle Checks", false, true).on_click(
-                                    cx.listener(|this, _: &ClickEvent, _, cx| {
-                                        if let Some(selection) = &mut this.server_selection {
-                                            selection.check = None;
-                                        }
-                                        cx.notify();
-                                    }),
-                                ),
-                            )
-                        })
                         .child(
                             button(theme, "details-copy", "Server kopieren", false, true).on_click(
                                 cx.listener(move |this, _: &ClickEvent, _, cx| {
@@ -569,7 +506,7 @@ impl Dashboard {
                         .child(
                             button(theme, "details-close", "Schließen", false, true).on_click(
                                 cx.listener(|this, _: &ClickEvent, _, cx| {
-                                    this.server_selection = None;
+                                    this.selected_card = None;
                                     cx.notify();
                                 }),
                             ),
@@ -587,17 +524,6 @@ impl Dashboard {
 
     fn check_result(&self, check: &Check) -> Option<&CheckResult> {
         self.services.get(&check.key)?.last.as_ref()
-    }
-
-    fn select_server(&mut self, server_id: &str, check: Option<&CheckKey>, cx: &mut Context<Self>) {
-        let was_selected = self.server_selection.as_ref().is_some_and(|selection| {
-            selection.server_id == server_id && selection.check.as_ref() == check
-        });
-        self.server_selection = (!was_selected).then(|| ServerSelection {
-            server_id: server_id.to_owned(),
-            check: check.cloned(),
-        });
-        cx.notify();
     }
 }
 

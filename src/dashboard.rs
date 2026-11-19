@@ -39,7 +39,7 @@ pub struct Dashboard {
     failed_only: bool,
     server_query: String,
     server_search_focus: FocusHandle,
-    server_selection: Option<server_views::ServerSelection>,
+    selected_card: Option<String>,
     last_run: Option<SystemTime>,
     working: bool,
     config_error: Option<String>,
@@ -72,7 +72,7 @@ impl Dashboard {
             failed_only: false,
             server_query: String::new(),
             server_search_focus: cx.focus_handle(),
-            server_selection: None,
+            selected_card: None,
             last_run: None,
             working: true,
             config_error: None,
@@ -195,13 +195,12 @@ impl Dashboard {
                             .find(|check| &check.key == id)
                             .is_some_and(|old| config.checks.iter().any(|new| old == new))
                 });
-                if self.server_selection.as_ref().is_some_and(|selection| {
-                    !config
-                        .servers
-                        .iter()
-                        .any(|server| server.id == selection.server_id)
-                }) {
-                    self.server_selection = None;
+                if self
+                    .selected_card
+                    .as_deref()
+                    .is_some_and(|id| !config.servers.iter().any(|server| server.id == id))
+                {
+                    self.selected_card = None;
                 }
                 self.working = !config.checks.is_empty();
                 self.config = config;

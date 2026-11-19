@@ -22,7 +22,7 @@ Pulseboard legt beim ersten Start eine Vorlage unter `%APPDATA%\Pulseboard\confi
 
 Lege mit `[[servers]]` eine Gruppe an und ergänze darunter beliebig viele `[[servers.checks]]`. Die **Matrix** ist die Standardansicht. Sie zeigt je Server eine Zeile und je Check-ID eine Spalte. Verwende auf mehreren Servern dieselbe Check-ID für vergleichbare Endpunkte. Ein Punkt bedeutet, dass der Check für diesen Server nicht konfiguriert ist. Ausstehende Checks erscheinen mit „…“.
 
-Mit **Kacheln** wechselst du zur Ansicht mit kompaktem Status pro Server. Beide Ansichten zeigen betroffene Server zuerst und bieten eine Serversuche sowie den Filter **Nur Fehler**. Ein Klick auf den Namen, eine Kachel oder eine Statuszelle öffnet die Details mit den Kopieraktionen. Pulseboard speichert die gewählte Ansicht neben der Farbpalette in `appearance.toml`.
+Mit **Kacheln** wechselst du zur Ansicht mit kompaktem Status pro Server. Beide Ansichten zeigen betroffene Server zuerst und bieten eine Serversuche sowie den Filter **Nur Fehler**. Ein Klick auf eine Kachel öffnet die Details mit den Kopieraktionen. Die Matrix zeigt alle Statuszellen in einer kompakten Tabelle ohne Detailbereich. Pulseboard speichert die gewählte Ansicht neben der Farbpalette in `appearance.toml`.
 
 ```toml
 [[servers]]
