@@ -1,0 +1,30 @@
+interval_seconds = 60
+timeout_seconds = 10
+close_to_tray = true
+notifications = true
+
+# [[checks]]
+# id = "backend"
+# name = "Backend API"
+# url = "https://api.example.com/health"
+# method = "GET"
+#
+# [[checks]]
+# id = "readiness"
+# name = "Service Readiness"
+# url = "https://api.example.com/readiness"
+# method = "POST"
+# expected_status = [200, 204]
+# body = '{"component":"database"}'
+# [checks.headers]
+# Content-Type = "application/json"
+# [checks.headers_from_env]
+# Authorization = "PULSEBOARD_READINESS_AUTH"
+#
+# [[checks]]
+# id = "legacy"
+# name = "Legacy API"
+# url = "https://api.example.com/health"
+# [checks.basic_auth]
+# username = "monitor"
+# password_env = "PULSEBOARD_LEGACY_PASSWORD"

@@ -1,0 +1,45 @@
+[package]
+name = "pulseboard"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+default = ["desktop"]
+desktop = ["dep:gpui", "dep:open", "dep:chrono", "dep:image", "dep:raw-window-handle", "dep:tray-icon", "dep:windows-sys", "dep:winreg", "dep:winrt-notification"]
+
+[dependencies]
+anyhow = "1"
+async-channel = "2"
+chrono = { version = "0.4", optional = true }
+directories = "6"
+futures-util = "0.3"
+open = { version = "5", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["default-tls", "system-proxy"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+toml = "0.9"
+url = { version = "2", features = ["serde"] }
+
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+gpui = { version = "=0.2.2", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+gpui = { version = "=0.2.2", default-features = false, features = ["windows-manifest"], optional = true }
+image = { version = "0.25", default-features = false, features = ["ico"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+tray-icon = { version = "0.21.3", default-features = false, optional = true }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Security", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"], optional = true }
+winreg = { version = "0.55", optional = true }
+winrt-notification = { version = "0.5.1", optional = true }
+
+[target.'cfg(target_os = "windows")'.build-dependencies]
+embed-resource = "3"
+
+[[bin]]
+name = "pulseboard"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[dev-dependencies]
+tempfile = "3"

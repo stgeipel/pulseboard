@@ -1,0 +1,113 @@
+name: Windows build and release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the current Cargo version as a GitHub release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    env:
+      PULSEBOARD_REPOSITORY: ${{ github.repository }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Select Rust and Windows SDK tools
+        shell: pwsh
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup component add rustfmt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
+          $fxc = Get-ChildItem $kits -Filter fxc.exe -Recurse -File |
+            Where-Object { $_.Directory.Name -eq 'x64' } | Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $fxc) { throw 'The Windows SDK shader compiler was not found.' }
+          "GPUI_FXC_PATH=$($fxc.FullName)" >> $env:GITHUB_ENV
+          $fxc.Directory.FullName >> $env:GITHUB_PATH
+      - name: Read and validate version
+        id: version
+        shell: pwsh
+        run: |
+          $version = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json |
+            Select-Object -ExpandProperty packages | Where-Object name -eq 'pulseboard' |
+            Select-Object -ExpandProperty version
+          if ($LASTEXITCODE -or $version -notmatch '^\d+\.\d+\.\d+$') {
+            throw 'A stable x.y.z Cargo version is required.'
+          }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw 'The Git tag must match the version in Cargo.toml.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Verify source
+        run: |
+          cargo fmt --all --check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cargo test --no-default-features --locked
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Build release executable
+        run: cargo build --release --locked
+      - name: Build Inno Setup installer
+        shell: pwsh
+        env:
+          APP_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          & $iscc "/DAppVersion=$env:APP_VERSION" installer/pulseboard.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $installer = Get-Item "dist/Pulseboard-$env:APP_VERSION-Windows-x64-Setup.exe"
+          $hash = (Get-FileHash -Algorithm SHA256 $installer).Hash.ToLowerInvariant()
+          "$hash  $($installer.Name)" | Set-Content "dist/$($installer.Name).sha256" -Encoding ascii
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pulseboard-windows-x64
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pulseboard-windows-x64
+          path: dist
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          tag="v$APP_VERSION"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists. Bump the Cargo version."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "Pulseboard $tag"
+          else
+            gh release create "$tag" dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --generate-notes --title "Pulseboard $tag"
+          fi
