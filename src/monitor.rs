@@ -1,4 +1,4 @@
-use crate::config::{self, Check, Config, Method};
+use crate::config::{self, Check, CheckKey, Config, Method};
 use async_channel::{Receiver, Sender};
 use futures_util::{StreamExt, stream};
 use reqwest::{Client, header::HeaderValue, redirect::Policy};
@@ -24,7 +24,7 @@ pub enum Event {
 
 #[derive(Clone)]
 pub struct CheckResult {
-    pub id: String,
+    pub key: CheckKey,
     pub outcome: Outcome,
     pub elapsed: Duration,
 }
@@ -165,27 +165,28 @@ async fn execute(client: &Client, check: &Check, default_timeout: u64) -> CheckR
     let started = Instant::now();
     let outcome = send(client, check, default_timeout).await;
     CheckResult {
-        id: check.id.clone(),
+        key: check.key.clone(),
         outcome,
         elapsed: started.elapsed(),
     }
 }
 
 async fn send(client: &Client, check: &Check, default_timeout: u64) -> Outcome {
-    let verb = match check.method {
+    let definition = &check.request;
+    let verb = match definition.method {
         Method::Get => reqwest::Method::GET,
         Method::Post => reqwest::Method::POST,
     };
     let mut request = client
         .request(verb, check.url.clone())
         .timeout(Duration::from_secs(
-            check.timeout_seconds.unwrap_or(default_timeout),
+            definition.timeout_seconds.unwrap_or(default_timeout),
         ));
 
-    for (name, value) in &check.headers {
+    for (name, value) in &definition.headers {
         request = request.header(name, value);
     }
-    for (name, variable) in &check.headers_from_env {
+    for (name, variable) in &definition.headers_from_env {
         let Some(mut value) = env::var(variable)
             .ok()
             .and_then(|value| HeaderValue::from_str(&value).ok())
@@ -195,7 +196,7 @@ async fn send(client: &Client, check: &Check, default_timeout: u64) -> Outcome {
         value.set_sensitive(true);
         request = request.header(name, value);
     }
-    if let Some(auth) = &check.basic_auth {
+    if let Some(auth) = &definition.basic_auth {
         let password = if let Some(variable) = &auth.password_env {
             match env::var(variable) {
                 Ok(password) => password,
@@ -208,7 +209,7 @@ async fn send(client: &Client, check: &Check, default_timeout: u64) -> Outcome {
         };
         request = request.basic_auth(&auth.username, Some(password));
     }
-    if let Some(body) = &check.body {
+    if let Some(body) = &definition.body {
         request = request.body(body.clone());
     }
 
@@ -216,10 +217,10 @@ async fn send(client: &Client, check: &Check, default_timeout: u64) -> Outcome {
         Ok(response) => {
             let status = response.status();
             let code = status.as_u16();
-            let healthy = if check.expected_status.is_empty() {
+            let healthy = if definition.expected_status.is_empty() {
                 status.is_success()
             } else {
-                check.expected_status.contains(&code)
+                definition.expected_status.contains(&code)
             };
             if healthy {
                 Outcome::Healthy(code)

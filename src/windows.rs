@@ -2,7 +2,14 @@ use anyhow::{Context, Result};
 use async_channel::{Receiver, bounded};
 use gpui::Window;
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use std::{ffi::OsStr, io::ErrorKind, os::windows::ffi::OsStrExt, ptr};
+use std::{
+    backtrace::Backtrace,
+    ffi::OsStr,
+    fs::{self, OpenOptions},
+    io::{ErrorKind, Write},
+    os::windows::ffi::OsStrExt,
+    ptr,
+};
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent,
     menu::{Menu, MenuEvent, MenuItem},
@@ -24,6 +31,35 @@ use winreg::{RegKey, enums::HKEY_CURRENT_USER};
 const APP_ID: &str = "Pulseboard.Desktop";
 const MUTEX_NAME: &str = "Local\\Pulseboard.Desktop";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+
+pub fn install_crash_log() {
+    let Ok(path) = pulseboard::config::path() else {
+        return;
+    };
+    let Some(directory) = path.parent().map(ToOwned::to_owned) else {
+        return;
+    };
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic| {
+        if fs::create_dir_all(&directory).is_ok()
+            && let Ok(mut file) = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(directory.join("crash.log"))
+        {
+            // The panic message can contain endpoint or credential values. Record only its location and stack.
+            let _ = writeln!(
+                file,
+                "\nPulseboard {} · {:?} · {:?}\n{}",
+                env!("CARGO_PKG_VERSION"),
+                std::time::SystemTime::now(),
+                panic.location(),
+                Backtrace::force_capture()
+            );
+        }
+        previous(panic);
+    }));
+}
 
 pub struct Instance(HANDLE);
 

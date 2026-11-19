@@ -1,15 +1,15 @@
 use async_channel::Sender;
 use chrono::{DateTime, Local};
 use gpui::{
-    ClickEvent, Context, Div, FontWeight, MouseButton, SharedString, Stateful, Window, div,
-    prelude::*, px, rgb,
+    ClickEvent, ClipboardItem, Context, Div, FontWeight, MouseButton, SharedString, Stateful,
+    Window, div, prelude::*, px, rgb,
 };
 use pulseboard::{
-    config::{self, Check, Config},
+    config::{self, Check, CheckKey, Config, Server},
     monitor::{self, CheckResult, Command, Event},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
     time::SystemTime,
 };
@@ -35,11 +35,13 @@ pub struct Dashboard {
     path: Option<PathBuf>,
     commands: Option<Sender<Command>>,
     config: Config,
-    services: HashMap<String, ServiceState>,
+    services: HashMap<CheckKey, ServiceState>,
+    collapsed_servers: HashSet<String>,
     last_run: Option<SystemTime>,
     working: bool,
     config_error: Option<String>,
     action_error: Option<String>,
+    clipboard_status: Option<&'static str>,
     #[cfg(target_os = "windows")]
     tray: Option<crate::windows::Tray>,
     #[cfg(target_os = "windows")]
@@ -59,10 +61,12 @@ impl Dashboard {
             commands: None,
             config: Config::default(),
             services: HashMap::new(),
+            collapsed_servers: HashSet::new(),
             last_run: None,
             working: true,
             config_error: None,
             action_error: None,
+            clipboard_status: None,
             #[cfg(target_os = "windows")]
             tray: None,
             #[cfg(target_os = "windows")]
@@ -148,12 +152,15 @@ impl Dashboard {
                             .config
                             .checks
                             .iter()
-                            .find(|check| &check.id == id)
+                            .find(|check| &check.key == id)
                             .is_some_and(|old| config.checks.iter().any(|new| old == new))
                 });
+                self.collapsed_servers
+                    .retain(|id| config.servers.iter().any(|server| &server.id == id));
                 self.working = !config.checks.is_empty();
                 self.config = config;
                 self.config_error = None;
+                self.clipboard_status = None;
                 #[cfg(target_os = "windows")]
                 self.close_to_tray.set(self.config.close_to_tray);
             }
@@ -186,7 +193,7 @@ impl Dashboard {
         #[cfg(target_os = "windows")]
         let mut changes = Vec::new();
         for result in results {
-            let state = self.services.entry(result.id.clone()).or_default();
+            let state = self.services.entry(result.key.clone()).or_default();
             let healthy = result.outcome.is_healthy();
             #[cfg(target_os = "windows")]
             {
@@ -198,9 +205,18 @@ impl Dashboard {
                         .config
                         .checks
                         .iter()
-                        .find(|check| check.id == result.id)
+                        .find(|check| check.key == result.key)
                 {
-                    changes.push((healthy, check.name.clone(), result.outcome.label()));
+                    let name = check
+                        .key
+                        .server
+                        .as_ref()
+                        .and_then(|id| self.config.servers.iter().find(|server| &server.id == id))
+                        .map_or_else(
+                            || check.request.name.clone(),
+                            |server| format!("{} / {}", server.name, check.request.name),
+                        );
+                    changes.push((healthy, name, result.outcome.label()));
                 }
             }
             if state.history.len() == HISTORY_SIZE {
@@ -328,15 +344,164 @@ impl Dashboard {
         }
     }
 
-    fn service_row(&self, check: &Check) -> Div {
-        let state = self.services.get(&check.id);
+    fn copy_to_clipboard(
+        &mut self,
+        block: anyhow::Result<String>,
+        status: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        self.clipboard_status = None;
+        match block {
+            Ok(block) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(block));
+                self.clipboard_status = Some(status);
+            }
+            Err(error) => self.action_error = Some(format!("Kopieren fehlgeschlagen. {error}")),
+        }
+        cx.notify();
+    }
+
+    fn server_group(&self, server: &Server, cx: &mut Context<Self>) -> Div {
+        let checks = || {
+            self.config
+                .checks
+                .iter()
+                .filter(|check| check.key.server.as_deref() == Some(server.id.as_str()))
+        };
+        let (total, failed) = checks().fold((0, 0), |(total, failed), check| {
+            let failed_check = self
+                .services
+                .get(&check.key)
+                .and_then(|state| state.last.as_ref())
+                .is_some_and(|result| !result.outcome.is_healthy());
+            (total + 1, failed + usize::from(failed_check))
+        });
+        let collapsed = self.collapsed_servers.contains(&server.id);
+        let toggle_id = server.id.clone();
+        let copy_id = server.id.clone();
+        let summary = if failed == 0 {
+            format!("{total} Checks")
+        } else {
+            format!("{total} Checks · {failed} Fehler")
+        };
+        div()
+            .flex()
+            .flex_col()
+            .rounded_xl()
+            .border_1()
+            .border_color(rgb(STROKE))
+            .bg(rgb(SURFACE))
+            .overflow_hidden()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .bg(rgb(PANEL))
+                    .px_4()
+                    .py_3()
+                    .child(
+                        button(
+                            format!("toggle-server:{}", server.id),
+                            if collapsed {
+                                "Aufklappen"
+                            } else {
+                                "Einklappen"
+                            },
+                            false,
+                            true,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                if !this.collapsed_servers.remove(&toggle_id) {
+                                    this.collapsed_servers.insert(toggle_id.clone());
+                                }
+                                cx.notify();
+                            },
+                        )),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .flex_1()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(server.name.clone()),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(if failed == 0 { MUTED } else { RED }))
+                            .child(summary),
+                    )
+                    .child(
+                        button(
+                            format!("copy-server:{}", server.id),
+                            "Server kopieren",
+                            false,
+                            true,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _: &ClickEvent, _, cx| {
+                                let block = this.config.copy_server_toml(&copy_id);
+                                this.copy_to_clipboard(
+                                    block,
+                                    "Server und Checks als TOML kopiert",
+                                    cx,
+                                );
+                            },
+                        )),
+                    ),
+            )
+            .when(!collapsed && total > 0, |group| {
+                group.child(self.service_table(checks(), cx))
+            })
+    }
+
+    fn service_table<'a>(
+        &self,
+        checks: impl Iterator<Item = &'a Check>,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .px_4()
+                    .py_3()
+                    .text_xs()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(rgb(MUTED))
+                    .child(div().flex_1().child("DIENST"))
+                    .child(div().w(px(160.0)).flex_none().child("STATUS"))
+                    .child(div().w(px(72.0)).flex_none().child("LATENZ"))
+                    .child(div().w(px(122.0)).flex_none().child("LETZTE 12 CHECKS"))
+                    .child(div().w(px(90.0)).flex_none()),
+            )
+            .children(checks.map(|check| self.service_row(check, cx)))
+    }
+
+    fn service_row(&self, check: &Check, cx: &mut Context<Self>) -> Div {
+        let state = self.services.get(&check.key);
         let result = state.and_then(|state| state.last.as_ref());
         let (label, accent) = match result {
             Some(result) if result.outcome.is_healthy() => ("Erreichbar", TEAL),
             Some(_) => ("Fehler", RED),
             None => ("Ausstehend", MUTED),
         };
-        let host = &check.url[url::Position::BeforeHost..url::Position::AfterPort];
+        let endpoint = format!(
+            "{}{}",
+            check.url.origin().ascii_serialization(),
+            check.url.path()
+        );
+        let key = check.key.clone();
+        let scope = key.server.as_deref().unwrap_or_default();
+        let button_id = format!("copy-check:{}:{scope}:{}", scope.len(), key.id);
         let details = result.map_or_else(
             || "Noch kein Ergebnis".to_string(),
             |result| result.outcome.label(),
@@ -365,9 +530,10 @@ impl Dashboard {
                     .gap_1()
                     .child(
                         div()
-                            .truncate()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(check.name.clone()),
+                            .child(check.request.name.clone()),
                     )
                     .child(
                         div()
@@ -383,14 +549,20 @@ impl Dashboard {
                                     .bg(rgb(PANEL))
                                     .px_1()
                                     .text_color(rgb(TEAL))
-                                    .child(check.method.label()),
+                                    .child(check.request.method.label()),
                             )
-                            .child(div().truncate().min_w_0().child(host.to_string())),
+                            .child(
+                                div()
+                                    .whitespace_nowrap()
+                                    .overflow_hidden()
+                                    .min_w_0()
+                                    .child(endpoint),
+                            ),
                     ),
             )
             .child(
                 div()
-                    .w(px(184.0))
+                    .w(px(160.0))
                     .flex_none()
                     .flex()
                     .flex_col()
@@ -408,12 +580,13 @@ impl Dashboard {
                     .child(
                         div()
                             .text_xs()
-                            .truncate()
+                            .whitespace_nowrap()
+                            .overflow_hidden()
                             .text_color(rgb(MUTED))
                             .child(details),
                     ),
             )
-            .child(div().w(px(96.0)).flex_none().text_sm().child(latency))
+            .child(div().w(px(72.0)).flex_none().text_sm().child(latency))
             .child(
                 div()
                     .w(px(122.0))
@@ -437,6 +610,14 @@ impl Dashboard {
                         div().w(px(7.0)).h(px(19.0)).rounded_sm().bg(rgb(color))
                     })),
             )
+            .child(div().w(px(90.0)).flex_none().child(
+                button(button_id, "Kopieren", false, true).on_click(cx.listener(
+                    move |this, _: &ClickEvent, _, cx| {
+                        let block = this.config.copy_check_toml(&key);
+                        this.copy_to_clipboard(block, "Healthcheck als TOML kopiert", cx);
+                    },
+                )),
+            ))
     }
 }
 
@@ -487,6 +668,9 @@ impl Render for Dashboard {
                     .children([self.config_error.as_ref(), self.action_error.as_ref()].into_iter().flatten().map(|error| {
                         div().bg(rgb(0x30251D)).rounded_md().px_4().py_3().text_sm().text_color(rgb(AMBER)).child(error.clone())
                     }))
+                    .children(self.clipboard_status.map(|status| {
+                        div().bg(rgb(PANEL)).rounded_md().px_4().py_3().text_sm().text_color(rgb(TEAL)).child(status)
+                    }))
                     .child(div().flex().gap_3()
                         .child(metric("Endpunkte", total, TEXT))
                         .child(metric("Erreichbar", healthy, TEAL))
@@ -494,7 +678,7 @@ impl Render for Dashboard {
                         .child(metric("Ausstehend", pending, MUTED)))
                     .child(div().flex().flex_col().gap_3()
                         .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("Healthchecks"))
-                        .child(if total == 0 {
+                        .child(if total == 0 && self.config.servers.is_empty() {
                             div().flex().flex_col().items_center().justify_center().gap_3().py_8().rounded_xl()
                                 .border_1().border_color(rgb(STROKE)).bg(rgb(SURFACE))
                                 .child(wordmark())
@@ -503,13 +687,15 @@ impl Render for Dashboard {
                                 .child(button("empty-open", "Konfiguration öffnen", false, self.path.is_some())
                                     .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_config(cx))))
                         } else {
-                            div().flex().flex_col().rounded_xl().border_1().border_color(rgb(STROKE)).bg(rgb(SURFACE)).overflow_hidden()
-                                .child(div().flex().items_center().gap_4().px_4().py_3().text_xs().font_weight(FontWeight::SEMIBOLD).text_color(rgb(MUTED))
-                                    .child(div().flex_1().child("DIENST"))
-                                    .child(div().w(px(184.0)).flex_none().child("STATUS"))
-                                    .child(div().w(px(96.0)).flex_none().child("LATENZ"))
-                                    .child(div().w(px(122.0)).flex_none().child("LETZTE 12 CHECKS")))
-                                .children(self.config.checks.iter().map(|check| self.service_row(check)))
+                            let mut groups = div().flex().flex_col().gap_3();
+                            groups = groups.children(self.config.servers.iter().map(|server| self.server_group(server, cx)));
+                            let mut standalone = self.config.checks.iter().filter(|check| check.key.server.is_none()).peekable();
+                            if standalone.peek().is_some() {
+                                groups = groups.child(div().flex().flex_col().rounded_xl().border_1().border_color(rgb(STROKE)).bg(rgb(SURFACE)).overflow_hidden()
+                                    .child(div().bg(rgb(PANEL)).px_4().py_3().font_weight(FontWeight::SEMIBOLD).child("Einzelne Endpunkte"))
+                                    .child(self.service_table(standalone, cx)));
+                            }
+                            groups
                         }))))
             .child(self.footer(cx))
     }
@@ -517,7 +703,7 @@ impl Render for Dashboard {
 
 impl Dashboard {
     fn footer(&self, cx: &mut Context<Self>) -> Div {
-        let mut footer = div()
+        let footer = div()
             .flex_none()
             .flex()
             .items_center()
@@ -530,13 +716,13 @@ impl Dashboard {
             .text_sm()
             .text_color(rgb(MUTED));
         #[cfg(target_os = "windows")]
-        {
+        let footer = {
             let tray_label = if self.tray.is_some() && self.config.close_to_tray {
                 "Schließen · System-Tray"
             } else {
                 "Schließen · Programm beenden"
             };
-            footer = footer.child(
+            footer.child(
                 div()
                     .flex()
                     .items_center()
@@ -557,8 +743,8 @@ impl Dashboard {
                         ),
                     )
                     .child(tray_label),
-            );
-        }
+            )
+        };
         footer.child(div().flex_1()).child(
             div()
                 .flex()
@@ -628,7 +814,7 @@ fn metric(label: &'static str, value: usize, color: u32) -> Div {
 }
 
 fn button(
-    id: &'static str,
+    id: impl Into<SharedString>,
     label: impl Into<SharedString>,
     primary: bool,
     enabled: bool,
@@ -641,6 +827,7 @@ fn button(
     } else {
         TEXT
     };
+    let id: SharedString = id.into();
     div()
         .id(id)
         .flex_none()
