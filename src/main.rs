@@ -33,6 +33,12 @@ fn main() {
         let tray = windows::Tray::new();
         #[cfg(target_os = "windows")]
         let hidden = tray.is_ok() && std::env::args().any(|arg| arg == "--background");
+        #[cfg(target_os = "windows")]
+        windows::diagnostic_event(if hidden {
+            "opening hidden window for tray startup"
+        } else {
+            "opening main window"
+        });
         #[cfg(not(target_os = "windows"))]
         let hidden = false;
 
@@ -62,14 +68,24 @@ fn main() {
         );
         if let Err(error) = window {
             #[cfg(target_os = "windows")]
-            windows::show_error(&format!(
-                "Das Fenster konnte nicht geöffnet werden. {error}"
-            ));
+            {
+                windows::diagnostic_event("main window failed to open");
+                windows::show_error(&format!(
+                    "Das Fenster konnte nicht geöffnet werden. {error}"
+                ));
+            }
             #[cfg(not(target_os = "windows"))]
             eprintln!("Das Fenster konnte nicht geöffnet werden. {error}");
             cx.quit();
-        } else if !hidden {
-            cx.activate(true);
+        } else {
+            #[cfg(target_os = "windows")]
+            windows::diagnostic_event("main window created");
+            if !hidden {
+                cx.activate(true);
+            }
         }
     });
+
+    #[cfg(target_os = "windows")]
+    windows::finish_crash_log();
 }

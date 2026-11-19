@@ -88,7 +88,12 @@ password_env = "PULSEBOARD_LEGACY_PASSWORD"
 - Für POST-Checks sollten die konfigurierten Endpunkte wiederholbare, nebenwirkungsfreie Prüfungen anbieten.
 - Bei einem Syntaxfehler nach **Neu laden** zeigt die Oberfläche den Fehler und der Monitor verwendet die letzte gültige Konfiguration weiter.
 - Der Verlauf bleibt während der laufenden Sitzung erhalten.
-- Bei einem Rust-Panic schreibt die Windows-Version einen Stacktrace nach `%APPDATA%\Pulseboard\config\crash.log`. Der Log enthält weder die Konfiguration noch die Panic-Nachricht.
+
+### Absturzprotokoll unter Windows
+
+Über **Absturzprotokoll** unten im Fenster öffnest du `%APPDATA%\Pulseboard\config\crash.log`. Die Datei hält App-Start, Fenster- und Tray-Aktionen sowie das reguläre Beenden fest. Bei einem Rust-Panic schreibt Pulseboard einen Stacktrace. Erreicht eine unbehandelte native Windows-Ausnahme den Absturzhandler, wird zusätzlich ihr Fehlercode protokolliert. Die Datei enthält keine Konfigurationswerte, URLs, Zugangsdaten oder Antwortinhalte.
+
+Wenn der Prozess plötzlich endet, starte Pulseboard erneut. Der nächste Start markiert die vorige Sitzung als unerwartet beendet. Das kann auch nach einem erzwungenen Beenden oder einem Neustart des Rechners passieren. Beim Start wird ein Log ab 512 KiB nach `crash.previous.log` verschoben. Für Windows-Fehler, die den Absturzhandler umgehen, kannst du zusätzlich in der **Ereignisanzeige → Windows-Protokolle → Anwendung** nach `pulseboard.exe` suchen.
 
 ## Tray, Autostart und Benachrichtigungen
 
