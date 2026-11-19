@@ -9,6 +9,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, OpenOptions},
     io::{ErrorKind, Write},
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -211,21 +212,53 @@ pub fn load(path: &Path) -> Result<Config> {
     parse(&content)
 }
 
+/// A TOML or deserialization error without the raw source line, which can contain credentials.
+#[derive(Debug)]
+pub struct DocumentError {
+    pub span: Option<Range<usize>>,
+    line: Option<usize>,
+}
+
+impl std::fmt::Display for DocumentError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Ungültiges TOML oder unbekannte Option")?;
+        if let Some(line) = self.line {
+            write!(formatter, " in Zeile {line}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for DocumentError {}
+
+pub fn save_edit(path: &Path, original: &str, edited: &str) -> Result<()> {
+    parse(edited)?;
+    let directory = path.parent().context("Konfigurationsverzeichnis fehlt")?;
+    let mut draft = tempfile::NamedTempFile::new_in(directory)
+        .context("Temporäre Konfigurationsdatei konnte nicht angelegt werden")?;
+    draft
+        .write_all(edited.as_bytes())
+        .context("Konfiguration konnte nicht geschrieben werden")?;
+
+    let current = fs::read_to_string(path).context("Konfiguration konnte nicht gelesen werden")?;
+    ensure!(
+        current == original,
+        "Die Datei wurde außerhalb von Pulseboard geändert. Sichere deinen Entwurf und öffne die Datei erneut."
+    );
+    draft
+        .persist(path)
+        .context("Konfiguration konnte nicht ersetzt werden")?;
+    Ok(())
+}
+
 pub fn parse(content: &str) -> Result<Config> {
     let mut config: Config = toml::from_str(content).map_err(|error| {
-        let location = error
-            .span()
+        let span = error.span();
+        let line = span
+            .as_ref()
             .and_then(|span| content.get(..span.start))
-            .map(|prefix| {
-                format!(
-                    " in Zeile {}",
-                    prefix.lines().count()
-                        + usize::from(prefix.is_empty() || prefix.ends_with('\n'))
-                )
-            })
-            .unwrap_or_default();
-        // TOML's full error includes the source line, which can contain credentials.
-        anyhow::anyhow!("Ungültiges TOML oder unbekannte Option{location}")
+            .map(|prefix| prefix.bytes().filter(|&byte| byte == b'\n').count() + 1);
+        DocumentError { span, line }
     })?;
 
     ensure!(
@@ -382,4 +415,40 @@ fn valid_timeout(seconds: u64) -> bool {
 
 fn valid_env_name(name: &str) -> bool {
     !name.is_empty() && name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+#[cfg(test)]
+mod editor_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_invalid_file_and_applies_valid_edits_verbatim() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("config.toml");
+        let original = "interval_seconds = 0\n";
+        fs::write(&path, original)?;
+
+        assert!(save_edit(&path, original, "interval_seconds = -1").is_err());
+        assert_eq!(fs::read_to_string(&path)?, original);
+
+        let edited = "# Benutzerkommentar\r\ninterval_seconds = 60\r\n";
+        save_edit(&path, original, edited)?;
+        assert_eq!(fs::read_to_string(&path)?, edited);
+        assert_eq!(load(&path)?.interval_seconds, 60);
+
+        assert!(save_edit(&path, original, "interval_seconds = 90").is_err());
+        assert_eq!(fs::read_to_string(&path)?, edited);
+        Ok(())
+    }
+
+    #[test]
+    fn retains_source_span_without_including_secret_text_in_diagnostic() {
+        let secret = "secret-content";
+        let invalid = format!("# Konfiguration\nunknown = \"{secret}\"\n");
+        let error = parse(&invalid).err().expect("expected a rejected field");
+        let diagnostic = error.downcast_ref::<DocumentError>().unwrap();
+        assert_eq!(diagnostic.line, Some(2));
+        assert!(diagnostic.span.is_some());
+        assert!(!error.to_string().contains(secret));
+    }
 }

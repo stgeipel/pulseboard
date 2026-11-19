@@ -29,6 +29,7 @@ fn main() {
     windows::install_crash_log();
 
     Application::new().run(|cx: &mut App| {
+        dashboard::init_editor(cx);
         #[cfg(target_os = "windows")]
         let tray = windows::Tray::new();
         #[cfg(target_os = "windows")]
@@ -56,14 +57,15 @@ fn main() {
                 ..Default::default()
             },
             |window, cx| {
-                cx.new(|cx| {
+                let dashboard = cx.new(|cx| {
                     Dashboard::new(
                         window,
                         cx,
                         #[cfg(target_os = "windows")]
                         tray,
                     )
-                })
+                });
+                cx.new(|cx| gpui_component::Root::new(dashboard, window, cx))
             },
         );
         if let Err(error) = window {

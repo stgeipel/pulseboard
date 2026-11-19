@@ -5,12 +5,14 @@ Pulseboard ist ein lokaler Healthcheck-Monitor für Windows mit einer dunklen, n
 ## Windows installieren und aktualisieren
 
 1. Lade unter **Releases** die passende `Pulseboard-…-Windows-x64-Setup.exe` herunter und installiere sie für deinen Windows-Benutzer. Der Installer richtet den Startmenü-Eintrag für Windows-Benachrichtigungen ein.
-2. Öffne Pulseboard und klicke auf **Konfiguration öffnen**. Trage deine Endpunkte ein, speichere die Datei und klicke auf **Neu laden**.
+2. Öffne Pulseboard und klicke auf **Konfiguration bearbeiten**. Trage deine Endpunkte ein und wähle **Speichern und anwenden**.
 3. Für ein Update öffnest du **Updates**, beendest Pulseboard über das Tray-Menü und führst den neueren Installer aus. Der Installationspfad bleibt gleich. Konfiguration und Autostart-Einstellung bleiben bei einem Upgrade erhalten.
 
 Der Installer ist für Windows 10 ab 22H2 und Windows 11 (x64) konfiguriert. Unter **Assets** findest du auch `pulseboard.exe` zum direkten Start ohne Installation. Die EXE-Dateien sind unsigniert. Für beide gibt es eine SHA-256-Datei.
 
 ## Konfiguration
+
+Der integrierte TOML-Editor zeigt Syntaxfarben und Zeilennummern. Fehler mit einer bekannten Position werden im Text markiert. Weitere Validierungsfehler erscheinen unter dem Editor. **Speichern und anwenden** (Strg+S) prüft die Datei vor dem Speichern und lädt sie für den Monitor neu. Bei Änderungen an der Datei durch einen externen Editor bleibt der Entwurf geöffnet. **Neu laden** steht weiterhin für extern gespeicherte Änderungen zur Verfügung.
 
 Über **Design** in der Kopfzeile wählst du zwischen **Porzellan & Kobaltblau**, **Graphit & Bernstein**, **Indigo & Magenta** und **Tiefblau & Cyan**. Die letzten beiden Paletten ergänzen einen dezenten Glow an der Statusleiste und der aktiven Auswahl. Pulseboard speichert die Auswahl in `appearance.toml` neben `config.toml` und lädt sie beim nächsten Start wieder. Die Standardpalette ist Graphit & Bernstein.
 
