@@ -107,10 +107,12 @@ Für weitere Designs ergänze eine Palette in `src/appearance.rs` und trage sie 
 
 Auf Windows brauchst du Rust (MSVC-Toolchain), die Visual Studio C++ Build Tools und das Windows SDK. Für Release-Builds muss GPUI `fxc.exe` finden. Falls nötig, setze `GPUI_FXC_PATH` auf den vollständigen Pfad.
 
+`rust-toolchain.toml` legt Rust 1.99.1 fest, um einen Windows-Absturz mit Rust 1.100.0 und `vertdll.dll` zu umgehen. Der Windows-Workflow prüft zusätzlich die DLL-Importe der fertigen EXE. [Rust-Issue #165915](https://github.com/rust-lang/rust/issues/165915)
+
 ```powershell
 cargo run --locked
 cargo test --no-default-features --locked
 cargo build --release --locked
 ```
 
-Der Workflow **Windows build and release** baut `pulseboard.exe` und den Installer für Windows x64. Beide Dateien und ihre SHA-256-Prüfsummen stehen im Actions-Artefakt und bei einer Veröffentlichung unter **Releases → Assets** bereit. Für eine neue Version erhöhe die Nummer in `Cargo.toml`, aktualisiere `Cargo.lock` und pushe ein passendes Tag (`v0.1.0` für die erste Version). Alternativ kannst du den Workflow auf `main` mit der Option **Publish** manuell starten. Der Windows-Build bezieht den Link zur Update-Seite aus `PULSEBOARD_REPOSITORY` im Format `owner/repo`.
+Der Workflow **Windows build and release** baut `pulseboard.exe` und den Installer für Windows x64. Beide Dateien und ihre SHA-256-Prüfsummen stehen im Actions-Artefakt und bei einer Veröffentlichung unter **Releases → Assets** bereit. Für eine neue Version erhöhe die Nummer in `Cargo.toml`, aktualisiere `Cargo.lock` und pushe ein passendes Tag wie `v0.1.1`. Alternativ kannst du den Workflow auf `main` mit der Option **Publish** manuell starten. Der Windows-Build bezieht den Link zur Update-Seite aus `PULSEBOARD_REPOSITORY` im Format `owner/repo`.
