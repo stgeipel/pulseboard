@@ -91,7 +91,7 @@ password_env = "PULSEBOARD_LEGACY_PASSWORD"
 
 ### Absturzprotokoll unter Windows
 
-Über **Absturzprotokoll** unten im Fenster öffnest du `%APPDATA%\Pulseboard\config\crash.log`. Die Datei hält App-Start, Fenster- und Tray-Aktionen sowie das reguläre Beenden fest. Bei einem Rust-Panic schreibt Pulseboard einen Stacktrace. Erreicht eine unbehandelte native Windows-Ausnahme den Absturzhandler, wird zusätzlich ihr Fehlercode protokolliert. Die Datei enthält keine Konfigurationswerte, URLs, Zugangsdaten oder Antwortinhalte.
+Über **Absturzprotokoll** unten im Fenster öffnest du `%APPDATA%\Pulseboard\config\crash.log`. Die Datei hält App-Start, Fenster- und Tray-Aktionen sowie das reguläre Beenden fest. Bei einem Rust-Panic schreibt Pulseboard einen Stacktrace. Erreicht eine unbehandelte native Windows-Ausnahme den Absturzhandler, protokolliert die App den Fehlercode, den Thread und bei einem Speicherzugriffsfehler die Art des Zugriffs. Wenn Windows das geladene Modul ermitteln kann, stehen auch sein Dateiname und der Offset im Protokoll. Die Datei enthält keine Konfigurationswerte, URLs, Zugangsdaten oder Antwortinhalte.
 
 Wenn der Prozess plötzlich endet, starte Pulseboard erneut. Der nächste Start markiert die vorige Sitzung als unerwartet beendet. Das kann auch nach einem erzwungenen Beenden oder einem Neustart des Rechners passieren. Beim Start wird ein Log ab 512 KiB nach `crash.previous.log` verschoben. Für Windows-Fehler, die den Absturzhandler umgehen, kannst du zusätzlich in der **Ereignisanzeige → Windows-Protokolle → Anwendung** nach `pulseboard.exe` suchen.
 

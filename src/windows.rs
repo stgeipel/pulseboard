@@ -1,18 +1,19 @@
 use anyhow::{Context, Result};
 use async_channel::{Receiver, bounded};
 use gpui::Window;
-use pulseboard::diagnostics::{SessionLog, exception_line};
+use pulseboard::diagnostics::{MONITOR_THREAD, NativeException, SessionLog};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::{
     backtrace::Backtrace,
     ffi::{OsStr, c_void},
-    io::ErrorKind,
+    io::{Cursor, ErrorKind},
+    mem::{MaybeUninit, size_of},
     os::windows::{ffi::OsStrExt, io::IntoRawHandle},
     path::PathBuf,
     ptr,
     sync::{
         OnceLock,
-        atomic::{AtomicPtr, Ordering},
+        atomic::{AtomicPtr, AtomicU32, Ordering},
     },
 };
 use tray_icon::{
@@ -27,7 +28,9 @@ use windows_sys::Win32::{
         Diagnostics::Debug::{
             EXCEPTION_CONTINUE_SEARCH, EXCEPTION_POINTERS, SetUnhandledExceptionFilter,
         },
-        Threading::CreateMutexW,
+        Memory::{MEM_IMAGE, MEMORY_BASIC_INFORMATION, VirtualQuery},
+        ProcessStatus::K32GetMappedFileNameW,
+        Threading::{CreateMutexW, GetCurrentProcess, GetCurrentThreadId},
     },
     UI::{
         Shell::SetCurrentProcessExplicitAppUserModelID,
@@ -44,6 +47,7 @@ const MUTEX_NAME: &str = "Local\\Pulseboard.Desktop";
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
 static CRASH_LOG: OnceLock<SessionLog> = OnceLock::new();
+static UI_THREAD: AtomicU32 = AtomicU32::new(0);
 static EXCEPTION_LOG_HANDLE: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
 
 pub fn install_crash_log() {
@@ -65,6 +69,7 @@ pub fn install_crash_log() {
         // Keep the append-only handle open until process exit so the exception filter
         // never needs to open a path or allocate memory on a faulting thread.
         EXCEPTION_LOG_HANDLE.store(file.into_raw_handle(), Ordering::Release);
+        UI_THREAD.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
         unsafe { SetUnhandledExceptionFilter(Some(log_native_exception)) };
     }
 
@@ -88,19 +93,70 @@ unsafe extern "system" fn log_native_exception(exception: *const EXCEPTION_POINT
         && let Some(exception) = unsafe { exception.as_ref() }
         && let Some(record) = unsafe { exception.ExceptionRecord.as_ref() }
     {
-        let line = exception_line(record.ExceptionCode as u32);
-        let mut written = 0;
-        unsafe {
-            WriteFile(
-                handle,
-                line.as_ptr(),
-                line.len() as u32,
-                &mut written,
-                ptr::null_mut(),
-            )
+        let thread = unsafe { GetCurrentThreadId() };
+        let role = if thread == UI_THREAD.load(Ordering::Relaxed) {
+            "ui"
+        } else if thread == MONITOR_THREAD.load(Ordering::Relaxed) {
+            "monitor"
+        } else {
+            "other"
         };
+        let mut name = [0; 96];
+        let module = mapped_image(record.ExceptionAddress, &mut name);
+        let details = NativeException {
+            code: record.ExceptionCode as u32,
+            thread,
+            role,
+            operation: (record.NumberParameters >= 2).then_some(record.ExceptionInformation[0]),
+            module,
+        };
+        let mut line = [0; 256];
+        let mut output = Cursor::new(line.as_mut_slice());
+        let _ = details.write(&mut output);
+        let len = output.position() as u32;
+        let mut written = 0;
+        unsafe { WriteFile(handle, line.as_ptr(), len, &mut written, ptr::null_mut()) };
     }
     EXCEPTION_CONTINUE_SEARCH
+}
+
+fn mapped_image(address: *const c_void, name: &mut [u8]) -> Option<(&str, usize)> {
+    let mut region = MaybeUninit::<MEMORY_BASIC_INFORMATION>::uninit();
+    let size = size_of::<MEMORY_BASIC_INFORMATION>();
+    if unsafe { VirtualQuery(address, region.as_mut_ptr(), size) } != size {
+        return None;
+    }
+    let region = unsafe { region.assume_init() };
+    if region.Type != MEM_IMAGE {
+        return None;
+    }
+    let offset = (address as usize).checked_sub(region.AllocationBase as usize)?;
+    let mut path = [0u16; 512];
+    let len = unsafe {
+        K32GetMappedFileNameW(
+            GetCurrentProcess(),
+            address,
+            path.as_mut_ptr(),
+            path.len() as u32,
+        )
+    } as usize;
+    // Reject truncated paths and write only the module basename, never the full path.
+    if len == 0 || len >= path.len() {
+        return None;
+    }
+    let leaf = path[..len]
+        .rsplit(|character| *character == u16::from(b'\\'))
+        .next()?;
+    if leaf.is_empty() || leaf.len() > name.len() {
+        return None;
+    }
+    for (out, character) in name.iter_mut().zip(leaf) {
+        *out = u8::try_from(*character)
+            .ok()
+            .filter(|byte| byte.is_ascii_graphic())
+            .unwrap_or(b'_');
+    }
+    Some((std::str::from_utf8(&name[..leaf.len()]).ok()?, offset))
 }
 
 pub fn diagnostic_event(event: &'static str) {

@@ -61,6 +61,12 @@ pub fn start(path: PathBuf) -> std::io::Result<(Sender<Command>, Receiver<Event>
     std::thread::Builder::new()
         .name("pulseboard-monitor".into())
         .spawn(move || {
+            #[cfg(all(target_os = "windows", feature = "desktop"))]
+            crate::diagnostics::MONITOR_THREAD.store(
+                unsafe { windows_sys::Win32::System::Threading::GetCurrentThreadId() },
+                std::sync::atomic::Ordering::Relaxed,
+            );
+
             let result = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -68,6 +74,8 @@ pub fn start(path: PathBuf) -> std::io::Result<(Sender<Command>, Receiver<Event>
             if result.is_err() {
                 let _ = events.send_blocking(Event::Fatal);
             }
+            #[cfg(all(target_os = "windows", feature = "desktop"))]
+            crate::diagnostics::MONITOR_THREAD.store(0, std::sync::atomic::Ordering::Relaxed);
         })?;
     Ok((commands, outgoing))
 }

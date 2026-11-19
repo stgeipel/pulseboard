@@ -70,16 +70,42 @@ impl SessionLog {
     }
 }
 
+#[cfg(all(target_os = "windows", feature = "desktop"))]
+pub static MONITOR_THREAD: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 #[cfg(any(target_os = "windows", test))]
-pub fn exception_line(code: u32) -> [u8; 34] {
-    let mut line = *b"native exception code=0x00000000\r\n";
-    let digits = b"0123456789ABCDEF";
-    let start = line.len() - 10;
-    for (index, byte) in line[start..start + 8].iter_mut().enumerate() {
-        let shift = (7 - index) * 4;
-        *byte = digits[((code >> shift) & 0xF) as usize];
+pub struct NativeException<'a> {
+    pub code: u32,
+    pub thread: u32,
+    pub role: &'static str,
+    pub operation: Option<usize>,
+    pub module: Option<(&'a str, usize)>,
+}
+
+#[cfg(any(target_os = "windows", test))]
+impl NativeException<'_> {
+    pub fn write(&self, output: &mut impl Write) -> io::Result<()> {
+        write!(
+            output,
+            "native exception code=0x{:08X} thread={} role={}",
+            self.code, self.thread, self.role
+        )?;
+        if self.code == 0xC0000005
+            && let Some(operation) = self.operation
+        {
+            let operation = match operation {
+                0 => "read",
+                1 => "write",
+                8 => "execute",
+                _ => "unknown",
+            };
+            write!(output, " operation={operation}")?;
+        }
+        if let Some((module, offset)) = self.module {
+            write!(output, " module={module} offset=0x{offset:X}")?;
+        }
+        output.write_all(b"\r\n")
     }
-    line
 }
 
 #[cfg(test)]
@@ -118,10 +144,22 @@ mod tests {
     }
 
     #[test]
-    fn formats_windows_exception_code_without_a_heap_allocation() {
+    fn writes_fault_context_into_a_fixed_buffer() -> io::Result<()> {
+        let exception = NativeException {
+            code: 0xC0000005,
+            thread: 101,
+            role: "ui",
+            operation: Some(1),
+            module: Some(("dwrite.dll", 0x124)),
+        };
+        let mut buffer = [0; 256];
+        let mut output = io::Cursor::new(buffer.as_mut_slice());
+        exception.write(&mut output)?;
+        let len = output.position() as usize;
         assert_eq!(
-            &exception_line(0xC0000005),
-            b"native exception code=0xC0000005\r\n"
+            &buffer[..len],
+            b"native exception code=0xC0000005 thread=101 role=ui operation=write module=dwrite.dll offset=0x124\r\n"
         );
+        Ok(())
     }
 }
