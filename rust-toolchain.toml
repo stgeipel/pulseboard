@@ -1,0 +1,5 @@
+[toolchain]
+# Rust 1.100.0 can link Windows thread synchronization to vertdll.dll (rust-lang/rust#165915).
+channel = "1.99.1"
+profile = "minimal"
+components = ["rustfmt"]

@@ -29,11 +29,9 @@ jobs:
       - name: Select Rust and Windows SDK tools
         shell: pwsh
         run: |
-          rustup update stable --no-self-update
+          rustc --version
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          rustup default stable
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          rustup component add rustfmt
+          rustup component add llvm-tools
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
           $fxc = Get-ChildItem $kits -Filter fxc.exe -Recurse -File |
@@ -64,6 +62,20 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Build release executable
         run: cargo build --release --locked
+      - name: Verify Windows executable imports
+        shell: pwsh
+        run: |
+          $sysroot = rustc --print sysroot
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $objdump = Join-Path $sysroot 'lib\rustlib\x86_64-pc-windows-msvc\bin\llvm-objdump.exe'
+          $imports = & $objdump -p target/release/pulseboard.exe
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (-not ($imports -match '^\s*DLL Name:')) {
+            throw 'The Windows executable import table could not be inspected.'
+          }
+          if ($imports -match '^\s*DLL Name:\s*vertdll\.dll\s*$') {
+            throw 'Pulseboard imports vertdll.dll. See Rust issue #165915.'
+          }
       - name: Build Inno Setup installer
         shell: pwsh
         env:
