@@ -12,13 +12,15 @@ Der Installer ist für Windows 10 ab 22H2 und Windows 11 (x64) konfiguriert. Unt
 
 ## Konfiguration
 
-Über **Design** in der Kopfzeile wechselst du zwischen **Porzellan & Kobaltblau** und **Graphit & Bernstein**. Pulseboard speichert die Auswahl in `appearance.toml` neben `config.toml` und lädt sie beim nächsten Start wieder. Die Standardpalette ist Graphit & Bernstein.
+Über **Design** in der Kopfzeile wählst du zwischen **Porzellan & Kobaltblau**, **Graphit & Bernstein**, **Indigo & Magenta** und **Tiefblau & Cyan**. Die letzten beiden Paletten ergänzen einen dezenten Glow an der Statusleiste und der aktiven Auswahl. Pulseboard speichert die Auswahl in `appearance.toml` neben `config.toml` und lädt sie beim nächsten Start wieder. Die Standardpalette ist Graphit & Bernstein.
 
 Pulseboard legt beim ersten Start eine Vorlage unter `%APPDATA%\Pulseboard\config\config.toml` an. Endpunkte werden erst nach dem Eintragen aktiv. Die App prüft sie beim Start, nach dem Neuladen und anschließend standardmäßig alle 60 Sekunden.
 
 ### Servergruppen
 
-Lege mit `[[servers]]` eine Gruppe an und ergänze darunter beliebig viele `[[servers.checks]]`. Die Gruppennamen erscheinen im Dashboard mit der Anzahl der Checks und Fehler. Du kannst jede Gruppe einklappen.
+Lege mit `[[servers]]` eine Gruppe an und ergänze darunter beliebig viele `[[servers.checks]]`. Die **Matrix** ist die Standardansicht. Sie zeigt je Server eine Zeile und je Check-ID eine Spalte. Verwende auf mehreren Servern dieselbe Check-ID für vergleichbare Endpunkte. Ein Punkt bedeutet, dass der Check für diesen Server nicht konfiguriert ist. Ausstehende Checks erscheinen mit „…“.
+
+Mit **Kacheln** wechselst du zur Ansicht mit kompaktem Status pro Server. Beide Ansichten zeigen betroffene Server zuerst und bieten eine Serversuche sowie den Filter **Nur Fehler**. Ein Klick auf den Namen, eine Kachel oder eine Statuszelle öffnet die Details mit den Kopieraktionen. Pulseboard speichert die gewählte Ansicht neben der Farbpalette in `appearance.toml`.
 
 ```toml
 [[servers]]
@@ -103,7 +105,7 @@ Wenn der Prozess plötzlich endet, starte Pulseboard erneut. Der nächste Start 
 
 ## Entwickeln und veröffentlichen
 
-Für weitere Designs ergänze eine Palette in `src/appearance.rs` und trage sie in `THEMES` ein. Die Felder benennen die jeweiligen Rollen, etwa Akzent, Flächen, Text und Statusfarben. Verwende eine eindeutige, stabile `id`. Das Dropdown übernimmt neue Paletten aus `THEMES` automatisch.
+Für weitere Designs ergänze eine Palette in `src/appearance.rs` und trage sie in `THEMES` ein. Die Felder benennen die jeweiligen Rollen, etwa Akzent, Flächen, Text und Statusfarben. Verwende eine eindeutige, stabile `id`. Das Dropdown übernimmt neue Paletten aus `THEMES` automatisch. Mit `glow: Some(farbe)` kannst du optional einen Lichtsaum für das Design aktivieren.
 
 Auf Windows brauchst du Rust (MSVC-Toolchain), die Visual Studio C++ Build Tools und das Windows SDK. Für Release-Builds muss GPUI `fxc.exe` finden. Falls nötig, setze `GPUI_FXC_PATH` auf den vollständigen Pfad.
 

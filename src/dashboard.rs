@@ -1,16 +1,19 @@
+mod server_views;
+
 use async_channel::Sender;
 use chrono::{DateTime, Local};
 use gpui::{
-    ClickEvent, ClipboardItem, Context, Div, FocusHandle, FontWeight, MouseButton, SharedString,
-    Stateful, Window, deferred, div, prelude::*, px, rgb,
+    BoxShadow, ClickEvent, ClipboardItem, Context, Div, FocusHandle, FontWeight, MouseButton,
+    SharedString, Stateful, Window, deferred, div, linear_color_stop, linear_gradient, point,
+    prelude::*, px, rgb,
 };
 use pulseboard::{
-    appearance::{self, DEFAULT_THEME, THEMES, Theme},
-    config::{self, Check, CheckKey, Config, Server},
+    appearance::{self, DEFAULT_THEME, ServerLayout, THEMES, Theme},
+    config::{self, Check, CheckKey, Config},
     monitor::{self, CheckResult, Command, Event},
 };
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     path::PathBuf,
     time::SystemTime,
 };
@@ -28,7 +31,11 @@ pub struct Dashboard {
     commands: Option<Sender<Command>>,
     config: Config,
     services: HashMap<CheckKey, ServiceState>,
-    collapsed_servers: HashSet<String>,
+    server_layout: ServerLayout,
+    failed_only: bool,
+    server_query: String,
+    server_search_focus: FocusHandle,
+    server_selection: Option<server_views::ServerSelection>,
     last_run: Option<SystemTime>,
     working: bool,
     config_error: Option<String>,
@@ -56,7 +63,11 @@ impl Dashboard {
             commands: None,
             config: Config::default(),
             services: HashMap::new(),
-            collapsed_servers: HashSet::new(),
+            server_layout: ServerLayout::default(),
+            failed_only: false,
+            server_query: String::new(),
+            server_search_focus: cx.focus_handle(),
+            server_selection: None,
             last_run: None,
             working: true,
             config_error: None,
@@ -76,7 +87,10 @@ impl Dashboard {
         match config::path() {
             Ok(path) => {
                 match appearance::load(&path.with_file_name("appearance.toml")) {
-                    Ok(theme) => dashboard.theme = theme,
+                    Ok(settings) => {
+                        dashboard.theme = settings.theme;
+                        dashboard.server_layout = settings.server_layout;
+                    }
                     Err(error) => dashboard.action_error = Some(error.to_string()),
                 }
                 match monitor::start(path.clone()) {
@@ -176,8 +190,14 @@ impl Dashboard {
                             .find(|check| &check.key == id)
                             .is_some_and(|old| config.checks.iter().any(|new| old == new))
                 });
-                self.collapsed_servers
-                    .retain(|id| config.servers.iter().any(|server| &server.id == id));
+                if self.server_selection.as_ref().is_some_and(|selection| {
+                    !config
+                        .servers
+                        .iter()
+                        .any(|server| server.id == selection.server_id)
+                }) {
+                    self.server_selection = None;
+                }
                 self.working = !config.checks.is_empty();
                 self.config = config;
                 self.config_error = None;
@@ -411,117 +431,6 @@ impl Dashboard {
         cx.notify();
     }
 
-    fn server_group(&self, server: &Server, cx: &mut Context<Self>) -> Div {
-        let theme = self.theme;
-        let checks = || {
-            self.config
-                .checks
-                .iter()
-                .filter(|check| check.key.server.as_deref() == Some(server.id.as_str()))
-        };
-        let (total, failed) = checks().fold((0, 0), |(total, failed), check| {
-            let failed_check = self
-                .services
-                .get(&check.key)
-                .and_then(|state| state.last.as_ref())
-                .is_some_and(|result| !result.outcome.is_healthy());
-            (total + 1, failed + usize::from(failed_check))
-        });
-        let collapsed = self.collapsed_servers.contains(&server.id);
-        let toggle_id = server.id.clone();
-        let copy_id = server.id.clone();
-        let summary = if failed == 0 {
-            format!("{total} Checks")
-        } else {
-            format!("{total} Checks · {failed} Fehler")
-        };
-        div()
-            .flex()
-            .flex_col()
-            .rounded_xl()
-            .border_1()
-            .border_color(rgb(theme.border))
-            .bg(rgb(theme.surface))
-            .overflow_hidden()
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .bg(rgb(if collapsed {
-                        theme.panel
-                    } else {
-                        theme.accent_soft
-                    }))
-                    .border_l_4()
-                    .border_color(rgb(if collapsed { theme.panel } else { theme.accent }))
-                    .px_4()
-                    .py_3()
-                    .child(
-                        button(
-                            theme,
-                            format!("toggle-server:{}", server.id),
-                            if collapsed {
-                                "Aufklappen"
-                            } else {
-                                "Einklappen"
-                            },
-                            false,
-                            true,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                if !this.collapsed_servers.remove(&toggle_id) {
-                                    this.collapsed_servers.insert(toggle_id.clone());
-                                }
-                                cx.notify();
-                            },
-                        )),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .flex_1()
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(server.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(if failed == 0 {
-                                theme.muted
-                            } else {
-                                theme.error
-                            }))
-                            .child(summary),
-                    )
-                    .child(
-                        button(
-                            theme,
-                            format!("copy-server:{}", server.id),
-                            "Server kopieren",
-                            false,
-                            true,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _: &ClickEvent, _, cx| {
-                                let block = this.config.copy_server_toml(&copy_id);
-                                this.copy_to_clipboard(
-                                    block,
-                                    "Server und Checks als TOML kopiert",
-                                    cx,
-                                );
-                            },
-                        )),
-                    ),
-            )
-            .when(!collapsed && total > 0, |group| {
-                group.child(self.service_table(checks(), cx))
-            })
-    }
-
     fn service_table<'a>(
         &self,
         checks: impl Iterator<Item = &'a Check>,
@@ -529,6 +438,7 @@ impl Dashboard {
     ) -> Div {
         let theme = self.theme;
         div()
+            .min_w(px(640.0))
             .flex()
             .flex_col()
             .child(
@@ -694,7 +604,7 @@ impl Dashboard {
 }
 
 impl Render for Dashboard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.theme;
         let total = self.config.checks.len();
         let (healthy, failed, pending) = self.counts();
@@ -707,13 +617,13 @@ impl Render for Dashboard {
         } else {
             ("Überwachung aktiv", theme.success)
         };
-        let last_run = self
-            .last_run
-            .map(|timestamp| {
+        let last_run = self.last_run.map_or_else(
+            || "Noch keine Prüfung abgeschlossen".into(),
+            |timestamp| {
                 let timestamp: DateTime<Local> = timestamp.into();
-                format!("Letzte Prüfung {} Uhr", timestamp.format("%H:%M:%S"))
-            })
-            .unwrap_or_else(|| "Noch keine Prüfung abgeschlossen".into());
+                format!("Letzte Prüfung {}", timestamp.format("%H:%M:%S"))
+            },
+        );
 
         div().flex().flex_col().size_full().bg(rgb(theme.background)).text_color(rgb(theme.text))
             .child(div().flex_none().flex().items_center().justify_between().gap_4().h(px(67.0)).px_8().bg(rgb(theme.surface))
@@ -731,46 +641,43 @@ impl Render for Dashboard {
                     .child(self.theme_picker(cx))))
             .child(div().flex_1().min_h_0().id("dashboard-scroll").overflow_y_scroll()
                 .child(div().flex().flex_col().gap_5().px_8().py_5()
-                    .child(div().flex().flex_col().gap_2()
-                        .child(div().flex().items_center().gap_2().text_xs().font_weight(FontWeight::SEMIBOLD)
-                            .text_color(rgb(status_color)).child(dot(status_color)).child(status))
-                        .child(div().text_size(px(34.0)).font_weight(FontWeight::BOLD).child("Serviceübersicht"))
-                        .child(div().flex().items_center().gap_3().text_sm().text_color(rgb(theme.muted))
-                            .child(format!("Intervall {} s", self.config.interval_seconds))
-                            .child("·")
-                            .child(last_run)))
+                    .child(div().flex().flex_wrap().items_center().gap_x_5().gap_y_2().rounded_md().border_1()
+                        .border_color(rgb(theme.border)).bg(rgb(theme.surface)).px_4().py_2().text_sm()
+                        .when_some(theme.glow, |summary, color| {
+                            with_glow(summary, theme, 16.0, 0.24)
+                                .border_color(gpui::Hsla::from(rgb(color)).opacity(0.55))
+                                .bg(linear_gradient(
+                                    90.0,
+                                    linear_color_stop(rgb(theme.accent_soft), 0.0),
+                                    linear_color_stop(rgb(theme.surface), 1.0),
+                                ))
+                        })
+                        .child(format!("{} Server", self.config.servers.len()))
+                        .child(format!("{total} Checks"))
+                        .child(div().text_color(rgb(theme.success)).child(format!("{healthy} erreichbar")))
+                        .child(div().text_color(rgb(if failed == 0 { theme.muted } else { theme.error })).child(format!("{failed} Fehler")))
+                        .when(pending > 0, |summary| summary.child(div().text_color(rgb(theme.warning)).child(format!("{pending} ausstehend"))))
+                        .child(div().text_color(rgb(theme.muted)).child(last_run))
+                        .child(div().text_color(rgb(theme.muted)).child(format!("Intervall {} s", self.config.interval_seconds)))
+                        .child(div().flex().items_center().gap_2().text_color(rgb(status_color)).child(dot(status_color)).child(status)))
                     .children([self.config_error.as_ref(), self.action_error.as_ref()].into_iter().flatten().map(|error| {
                         div().bg(rgb(theme.error_soft)).rounded_md().px_4().py_3().text_sm().text_color(rgb(theme.error)).child(error.clone())
                     }))
                     .children(self.clipboard_status.map(|status| {
                         div().bg(rgb(theme.panel)).rounded_md().px_4().py_3().text_sm().text_color(rgb(theme.accent_ink)).child(status)
                     }))
-                    .child(div().flex().gap_3()
-                        .child(metric(theme, "Endpunkte", total, theme.text))
-                        .child(metric(theme, "Erreichbar", healthy, theme.success))
-                        .child(metric(theme, "Mit Fehlern", failed, theme.error))
-                        .child(metric(theme, "Ausstehend", pending, theme.warning)))
-                    .child(div().flex().flex_col().gap_3()
-                        .child(div().text_lg().font_weight(FontWeight::SEMIBOLD).child("Healthchecks"))
-                        .child(if total == 0 && self.config.servers.is_empty() {
-                            div().flex().flex_col().items_center().justify_center().gap_3().py_8().rounded_xl()
-                                .border_1().border_color(rgb(theme.border)).bg(rgb(theme.surface))
-                                .child(wordmark(theme))
-                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Noch keine Endpunkte eingerichtet"))
-                                .child(div().text_sm().text_color(rgb(theme.muted)).child("Füge deine Endpunkte in der TOML-Datei hinzu und lade sie neu."))
-                                .child(button(theme, "empty-open", "Konfiguration öffnen", false, self.path.is_some())
-                                    .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_config(cx))))
-                        } else {
-                            let mut groups = div().flex().flex_col().gap_3();
-                            groups = groups.children(self.config.servers.iter().map(|server| self.server_group(server, cx)));
-                            let mut standalone = self.config.checks.iter().filter(|check| check.key.server.is_none()).peekable();
-                            if standalone.peek().is_some() {
-                                groups = groups.child(div().flex().flex_col().rounded_xl().border_1().border_color(rgb(theme.border)).bg(rgb(theme.surface)).overflow_hidden()
-                                    .child(div().bg(rgb(theme.panel)).px_4().py_3().font_weight(FontWeight::SEMIBOLD).child("Einzelne Endpunkte"))
-                                    .child(self.service_table(standalone, cx)));
-                            }
-                            groups
-                        }))))
+                    .child(if total == 0 && self.config.servers.is_empty() {
+                        div().flex().flex_col().items_center().justify_center().gap_3().py_8().rounded_xl()
+                            .border_1().border_color(rgb(theme.border)).bg(rgb(theme.surface))
+                            .child(wordmark(theme))
+                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Noch keine Endpunkte eingerichtet"))
+                            .child(div().text_sm().text_color(rgb(theme.muted)).child("Füge deine Endpunkte in der TOML-Datei hinzu und lade sie neu."))
+                            .child(button(theme, "empty-open", "Konfiguration öffnen", false, self.path.is_some())
+                                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.open_config(cx))))
+                    } else {
+                        self.server_overview(window, cx)
+                    })))
+            .children(self.server_details(cx))
             .child(self.footer(cx))
             .when_some(self.theme_cursor, |dashboard, cursor| dashboard.child(self.theme_menu(cursor, cx)))
     }
@@ -787,16 +694,28 @@ impl Dashboard {
     fn select_theme(&mut self, theme: &'static Theme, _window: &Window, cx: &mut Context<Self>) {
         self.theme = theme;
         self.theme_cursor = None;
+        self.save_appearance();
+        #[cfg(target_os = "windows")]
+        crate::windows::decorate(_window, theme.dark);
+        cx.notify();
+    }
+
+    fn save_appearance(&mut self) {
         self.action_error = self
             .path
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Verzeichnis für Design-Einstellungen fehlt"))
-            .and_then(|path| appearance::save(&path.with_file_name("appearance.toml"), theme))
+            .and_then(|path| {
+                appearance::save(
+                    &path.with_file_name("appearance.toml"),
+                    self.theme,
+                    self.server_layout,
+                )
+            })
             .err()
-            .map(|error| format!("Design konnte nicht gespeichert werden. {error}"));
-        #[cfg(target_os = "windows")]
-        crate::windows::decorate(_window, theme.dark);
-        cx.notify();
+            .map(|error| {
+                format!("Ansichtseinstellungen konnten nicht gespeichert werden. {error}")
+            });
     }
 
     fn theme_picker(&self, cx: &mut Context<Self>) -> Stateful<Div> {
@@ -976,6 +895,19 @@ fn dot(color: u32) -> Div {
         .bg(rgb(color))
 }
 
+fn with_glow<E: Styled>(element: E, theme: &Theme, radius: f32, opacity: f32) -> E {
+    if let Some(color) = theme.glow {
+        element.shadow(vec![BoxShadow {
+            color: gpui::Hsla::from(rgb(color)).opacity(opacity),
+            offset: point(px(0.0), px(0.0)),
+            blur_radius: px(radius),
+            spread_radius: px(0.0),
+        }])
+    } else {
+        element
+    }
+}
+
 fn wordmark(theme: &Theme) -> Div {
     div()
         .flex()
@@ -987,6 +919,9 @@ fn wordmark(theme: &Theme) -> Div {
         .bg(rgb(theme.accent_soft))
         .border_1()
         .border_color(rgb(theme.border))
+        .when(theme.glow.is_some(), |logo| {
+            with_glow(logo, theme, 11.0, 0.32)
+        })
         .children([7.0, 15.0, 22.0, 12.0].into_iter().map(|h| {
             div()
                 .w(px(2.0))
@@ -994,29 +929,6 @@ fn wordmark(theme: &Theme) -> Div {
                 .rounded_full()
                 .bg(rgb(theme.accent_ink))
         }))
-}
-
-fn metric(theme: &Theme, label: &'static str, value: usize, color: u32) -> Div {
-    div()
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap_1()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(theme.border))
-        .bg(rgb(theme.surface))
-        .px_4()
-        .py_3()
-        .child(div().text_sm().text_color(rgb(theme.muted)).child(label))
-        .child(
-            div()
-                .text_2xl()
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(color))
-                .child(value.to_string()),
-        )
 }
 
 fn button(
@@ -1058,6 +970,9 @@ fn button(
         .text_color(rgb(foreground))
         .text_sm()
         .font_weight(FontWeight::MEDIUM)
+        .when(primary && enabled, |button| {
+            with_glow(button, theme, 10.0, 0.28)
+        })
         .when(enabled, |button| {
             button
                 .cursor_pointer()
