@@ -1,5 +1,6 @@
 mod config_editor;
 mod server_views;
+mod updates;
 
 pub(crate) use config_editor::init as init_editor;
 
@@ -40,6 +41,9 @@ pub struct Dashboard {
     server_query: String,
     server_search_focus: FocusHandle,
     selected_card: Option<String>,
+    selected_server: Option<String>,
+    expanded_check: Option<CheckKey>,
+    available_update: Option<String>,
     last_run: Option<SystemTime>,
     working: bool,
     config_error: Option<String>,
@@ -73,6 +77,9 @@ impl Dashboard {
             server_query: String::new(),
             server_search_focus: cx.focus_handle(),
             selected_card: None,
+            selected_server: None,
+            expanded_check: None,
+            available_update: None,
             last_run: None,
             working: true,
             config_error: None,
@@ -88,6 +95,22 @@ impl Dashboard {
             #[cfg(target_os = "windows")]
             autostart: false,
         };
+
+        if let Some(repository) = release_repository() {
+            cx.spawn(async move |dashboard, cx| {
+                let available = cx
+                    .background_executor()
+                    .spawn(async move { updates::latest(repository) })
+                    .await;
+                if let Some(version) = available {
+                    let _ = dashboard.update(cx, |dashboard, cx| {
+                        dashboard.available_update = Some(version);
+                        cx.notify();
+                    });
+                }
+            })
+            .detach();
+        }
 
         match config::path() {
             Ok(path) => {
@@ -1041,9 +1064,22 @@ impl Dashboard {
                 .gap_3()
                 .child(concat!("v", env!("CARGO_PKG_VERSION")))
                 .when(release_repository().is_some(), |row| {
-                    row.child(button(theme, "releases", "Updates", false, true).on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.open_releases(cx)),
-                    ))
+                    let label = self.available_update.as_ref().map_or_else(
+                        || "Updates".to_owned(),
+                        |version| format!("Update verfügbar · {version}"),
+                    );
+                    row.child(
+                        button(
+                            theme,
+                            "releases",
+                            label,
+                            self.available_update.is_some(),
+                            true,
+                        )
+                        .on_click(
+                            cx.listener(|this, _: &ClickEvent, _, cx| this.open_releases(cx)),
+                        ),
+                    )
                 }),
         )
     }

@@ -143,6 +143,7 @@ pub const DEFAULT_THEME: &Theme = &GRAPHITE;
 #[serde(rename_all = "snake_case")]
 pub enum ServerLayout {
     #[default]
+    ServerList,
     Matrix,
     Cards,
 }
@@ -164,7 +165,8 @@ impl Default for Appearance {
 #[derive(Deserialize, Serialize)]
 struct StoredAppearance {
     theme: String,
-    #[serde(default)]
+    // Use the new default once for files written before the server list existed.
+    #[serde(default, rename = "server_view")]
     server_layout: ServerLayout,
 }
 
@@ -222,10 +224,10 @@ mod tests {
         }
 
         assert_eq!(fs::read_to_string(config)?, "interval_seconds = 60");
-        fs::write(&path, "theme = 'porcelain'")?;
+        fs::write(&path, "theme = 'porcelain'\nserver_layout = 'matrix'")?;
         let legacy = load(&path)?;
         assert_eq!(legacy.theme.id, "porcelain");
-        assert_eq!(legacy.server_layout, ServerLayout::Matrix);
+        assert_eq!(legacy.server_layout, ServerLayout::ServerList);
         save(&path, legacy.theme, ServerLayout::Matrix)?;
         assert_eq!(load(&path)?.server_layout, ServerLayout::Matrix);
         fs::write(&path, "theme = 'removed-theme'")?;

@@ -1,3 +1,5 @@
+mod server_list;
+
 use super::{Dashboard, button, with_glow};
 use gpui::{
     ClickEvent, Context, Div, FontWeight, KeyDownEvent, SharedString, Window, div, prelude::*, px,
@@ -102,7 +104,9 @@ impl Dashboard {
                             .flex_wrap()
                             .items_center()
                             .gap_2()
-                            .child(self.server_search(cx))
+                            .when(self.server_layout != ServerLayout::ServerList, |toolbar| {
+                                toolbar.child(self.server_search(cx))
+                            })
                             .child(
                                 button(
                                     theme,
@@ -124,6 +128,11 @@ impl Dashboard {
                             )
                             .children(
                                 [
+                                    (
+                                        ServerLayout::ServerList,
+                                        "layout-server-list",
+                                        "Serverliste",
+                                    ),
                                     (ServerLayout::Matrix, "layout-matrix", "Matrix"),
                                     (ServerLayout::Cards, "layout-cards", "Kacheln"),
                                 ]
@@ -143,7 +152,9 @@ impl Dashboard {
                             ),
                     ),
             );
-            view = view.child(if rows.is_empty() {
+            view = view.child(if self.server_layout == ServerLayout::ServerList {
+                self.server_list(&rows, window, cx)
+            } else if rows.is_empty() {
                 div()
                     .rounded_md()
                     .bg(rgb(theme.surface))
@@ -156,9 +167,10 @@ impl Dashboard {
                         "Keine passenden Server gefunden."
                     })
             } else {
-                match self.server_layout {
-                    ServerLayout::Matrix => self.server_matrix(&columns, &rows),
-                    ServerLayout::Cards => self.server_cards(&columns, &rows, window, cx),
+                if self.server_layout == ServerLayout::Matrix {
+                    self.server_matrix(&columns, &rows)
+                } else {
+                    self.server_cards(&columns, &rows, window, cx)
                 }
             });
         }

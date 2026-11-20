@@ -4872,7 +4872,7 @@ dependencies = [
 
 [[package]]
 name = "pulseboard"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
@@ -4887,6 +4887,7 @@ dependencies = [
  "raw-window-handle",
  "reqwest",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
